@@ -1,0 +1,98 @@
+---
+title: Command API
+description: Человеко-читаемое руководство по SubCommand, LongCommandExecutor и CommandRegistry.
+order: 12
+---
+
+# Command API
+
+Command API решает три задачи:
+
+1. Разбивает одну команду на сабкоманды.
+2. Централизует проверку прав.
+3. Даёт единый tab-complete по всем сабкомандам.
+
+## Архитектура
+
+- `SubCommand`: бизнес-логика одной ветки (`reload`, `give`, `stats`).
+- `LongCommandExecutor`: маршрутизатор, выбирающий сабкоманду по alias.
+- `CommandRegistry`: безопасная регистрация в Bukkit.
+
+## `SubCommand`
+
+```java
+public interface SubCommand {
+    void onExecute(CommandSender sender, String[] args);
+    List<String> onTabComplete(CommandSender sender, String[] args);
+}
+```
+
+Параметры `onExecute`:
+
+| Аргумент | Тип | Что означает |
+| --- | --- | --- |
+| `sender` | `CommandSender` | Источник команды: игрок, консоль, командный блок |
+| `args` | `String[]` | Полный набор аргументов после корневой команды |
+
+Практика:
+
+- `args[0]` обычно содержит имя сабкоманды.
+- Перед чтением `args[1]` и дальше всегда проверяйте `args.length`.
+
+## `LongCommandExecutor`
+
+Ключевой метод регистрации сабкоманд:
+
+```java
+addSubCommand(command, aliases, permission)
+```
+
+Параметры:
+
+| Аргумент | Тип | Что делает |
+| --- | --- | --- |
+| `command` | `SubCommand` | Обработчик выполнения и tab-complete |
+| `aliases` | `String[]` | Список псевдонимов, первый alias используется как основной |
+| `permission` | `Permission` | Проверяется перед вызовом `onExecute` |
+
+Алгоритм выполнения:
+
+1. Берётся `args[0]`.
+2. Ищется зарегистрированный alias.
+3. Проверяется permission.
+4. Вызывается `onExecute` найденной сабкоманды.
+
+Алгоритм tab-complete:
+
+- при `args.length == 1` возвращает список главных alias;
+- при `args.length > 1` вызывает `SubCommand.onTabComplete`.
+
+## `CommandRegistry`
+
+```java
+CommandRegistry registry = new CommandRegistry(plugin);
+registry.registerCommand("nextlib", new MainCommandExecutor());
+```
+
+Что делает `registerCommand`:
+
+- ищет команду в `plugin.yml` по имени;
+- ставит `setExecutor` и `setTabCompleter`;
+- если команды нет, пишет warning и не падает с исключением.
+
+## Рабочий пример
+
+```java
+public class MainCommand extends LongCommandExecutor {
+    public MainCommand() {
+        addSubCommand(new ReloadSubCommand(), new String[]{"reload", "rl"}, new Permission("my.reload"));
+    }
+}
+```
+
+## Что обычно ломается
+
+1. Команда не объявлена в `plugin.yml`.
+2. Alias в чате не совпадает с alias при регистрации.
+3. Нет проверки `args.length`, из-за чего падает `IndexOutOfBoundsException`.
+4. Код рассчитан только на `Player`, но команду вызывает консоль.

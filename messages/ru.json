@@ -1,0 +1,15 @@
+{
+  "siteName": "NextLib Docs",
+  "repo": "Репозиторий",
+  "searchPlaceholder": "Поиск по документации...",
+  "themeLight": "Светлая",
+  "themeDark": "Темная",
+  "themeSystem": "Системная",
+  "onThisPage": "На этой странице",
+  "previous": "Назад",
+  "next": "Вперед",
+  "more": "Дополнительно",
+  "docs": "Документация",
+  "openMenu": "Открыть меню",
+  "closeMenu": "Закрыть меню"
+}

@@ -1,0 +1,89 @@
+---
+title: Item API
+description: "Подробно про ItemBuilder и ItemUtil: что делает каждый метод и как безопасно работать с PDC."
+order: 13
+---
+
+# Item API
+
+Item API нужен для двух вещей:
+
+1. Удобно собирать `ItemStack` через fluent-подход.
+2. Хранить служебные данные предмета в `PersistentDataContainer`.
+
+## `ItemBuilder`
+
+`ItemBuilder` строит предмет по шагам и возвращает готовый `ItemStack` через `build()`.
+
+### Основные методы
+
+`setName(String name)`
+
+- Вход: `name` — отображаемое имя предмета.
+- Что делает: применяет цветовой форматтер (`&` + HEX).
+- Результат: обновлённый builder.
+
+`setLore(String... lore)` / `setLore(List<String> lore)`
+
+- Вход: строки лора.
+- Что делает: форматирует каждую строку и записывает в meta.
+- Результат: обновлённый builder.
+
+`addEnchant(Enchantment enchantment, int level, boolean ignoreLevelRestriction)`
+
+| Аргумент | Что означает |
+| --- | --- |
+| `enchantment` | Тип зачарования |
+| `level` | Уровень зачарования |
+| `ignoreLevelRestriction` | Игнорировать ли лимиты vanilla-уровней |
+
+`setPersistentData(JavaPlugin plugin, String key, String value)`
+`setPersistentData(JavaPlugin plugin, String key, int value)`
+
+| Аргумент | Что означает |
+| --- | --- |
+| `plugin` | Нужен для создания `NamespacedKey` |
+| `key` | Имя ключа в PDC |
+| `value` | Значение (строка или число) |
+
+`build()`
+
+- Возвращает готовый `ItemStack`.
+- После `build()` можно продолжать менять builder, но лучше считать объект завершённым.
+
+## Пример
+
+```java
+ItemStack reward = new ItemBuilder(Material.DIAMOND)
+    .setName("&bНаграда")
+    .setLore(List.of("&7Ежедневный бонус", "&eНажмите для получения"))
+    .setUnbreakable(true)
+    .setPersistentData(plugin, "reward_id", "daily")
+    .build();
+```
+
+## `ItemUtil`
+
+`ItemUtil` читает данные из уже созданных предметов и сравнивает предметы.
+
+`hasPersistentData(item, plugin, key)`
+
+- Возвращает `true`, если ключ существует (string/int).
+
+`getStringData(item, plugin, key)`
+
+- Читает строку по ключу из PDC.
+
+`getIntData(item, plugin, key)`
+
+- Читает целое число по ключу из PDC.
+
+`isSimilar(first, second)`
+
+- Сравнивает предметы без учёта `amount`.
+
+## Частые ошибки
+
+1. Пытаются читать int-методом значение, записанное как string.
+2. Запись делается одним `plugin` instance, чтение другим.
+3. Ожидаются методы, которых нет в текущем API.

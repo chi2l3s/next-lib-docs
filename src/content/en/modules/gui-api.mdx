@@ -1,0 +1,62 @@
+---
+title: GUI API
+description: "Code-accurate GUI guide for GuiManager, GuiLoader, Actions and Conditions."
+order: 11
+---
+
+# GUI API
+
+## Important runtime behavior
+
+- GUI id is derived from filename (`main.yml -> main`)
+- Loader reads top-level `.yml` files only (no recursive folders)
+- Click keys are snake_case: `on_left_click`, `on_right_click`
+- `visible_when` and `hidden_when` are not applied by current loader
+- `enchanted_when` is supported
+
+## Setup
+
+```java
+guiManager = new GuiManager(this);
+guiManager.loadFromFolder(new File(getDataFolder(), "menus"));
+```
+
+## YAML example
+
+```yaml
+title: "&8Main"
+size: 27
+items:
+  shop:
+    material: EMERALD
+    slot: 11
+    name: "&aShop"
+    on_left_click:
+      - "opengui shop"
+    on_right_click:
+      - "message &eRight click"
+    enchanted_when:
+      - "always"
+```
+
+## Built-in actions
+
+- `close`
+- `command <cmd>`
+- `console <cmd>`
+- `message <text>`
+- `opengui <id>`
+- `update`
+- `playsound <sound> <volume> <pitch>`
+
+## Built-in conditions
+
+- `always`
+- `never`
+
+Custom registration:
+
+```java
+Actions.registerAction("teleport", (manager, args) -> player -> { /* ... */ });
+Conditions.registerCondition("has_perm", (manager, args) -> player -> player.hasPermission(args));
+```

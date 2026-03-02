@@ -1,0 +1,17 @@
+---
+title: Color API
+description: ColorUtil formatting rules for & and HEX codes.
+order: 14
+---
+
+# Color API
+
+`ColorUtil.formatMessage(...)`:
+
+- replaces HEX placeholders like `&#3498db`
+- applies `&` color code translation
+- returns empty string for `null`
+
+```java
+player.sendMessage(NextLib.c.formatMessage("&aWelcome to &#3498dbNextLib"));
+```

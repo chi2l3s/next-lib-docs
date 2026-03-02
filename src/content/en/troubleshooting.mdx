@@ -1,0 +1,35 @@
+---
+title: Troubleshooting
+description: Common issues for current NextLib 1.0.7 implementation.
+order: 20
+---
+
+# Troubleshooting
+
+## Dynamic Database
+
+### Missing JDBC driver
+
+Add the matching driver dependency and ensure it is available at runtime.
+
+### Failed to resolve constructor
+
+Entity constructor must include all fields in declaration order.
+
+### Unknown field in where/set
+
+Field names in query builder must match entity Java field names exactly.
+
+## GUI API
+
+### GUI id not found
+
+GUI id is filename-based (`main.yml` => `main`).
+
+### Click action does not run
+
+Use `on_left_click` / `on_right_click` keys (snake_case).
+
+### visible_when/hidden_when do nothing
+
+These keys are not applied by current `GuiLoader`; only `enchanted_when` is used.

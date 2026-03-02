@@ -1,0 +1,239 @@
+---
+title: Dynamic Database
+description: "Подробно и по-человечески: как устроен модуль, что делает каждый шаг и что означают параметры."
+order: 10
+---
+
+# Dynamic Database
+
+Dynamic Database в NextLib — это тонкая ORM-обёртка над JDBC/HikariCP.
+
+Идея простая:
+
+1. Вы настраиваете подключение (`DatabaseConfig`, `DatabaseManager`).
+2. Регистрируете Java-класс как таблицу (`DynamicDatabase.register`).
+3. Работаете fluent-запросами (`findFirst`, `findMany`, `update`, `create`).
+
+## Когда использовать
+
+- Нужно быстро хранить данные плагина без ручной сборки SQL в каждом месте.
+- Нужны одинаковые API-операции для MySQL/PostgreSQL/SQLite.
+- Не нужна сложная ORM с lazy loading и полноценными миграциями.
+
+## Базовые сущности и их роль
+
+### `DatabaseConfig`
+
+Отвечает за параметры подключения.
+
+Ключевые параметры:
+
+- `type` — тип БД (`MYSQL`, `POSTGRESQL`, `SQLITE`).
+- `host`, `port`, `database`, `username`, `password` — обязательны для MySQL/PostgreSQL.
+- `file` — путь к файлу SQLite.
+- `property(key, value)` — параметры пула HikariCP и datasource.
+
+### `DatabaseManager`
+
+Хранит и обслуживает подключения.
+
+Что делает:
+
+- регистрирует клиент по имени (`register("main", config)`),
+- хранит default-клиент,
+- закрывает пулы в `close()`.
+
+### `DatabaseClient`
+
+Низкоуровневый исполнитель SQL.
+
+Основные методы:
+
+- `query(...)` — список результатов,
+- `queryOne(...)` — один результат (`Optional`),
+- `execute(...)` — INSERT/UPDATE/DDL,
+- `executeBatch(...)` — пакетная запись,
+- `withConnection(...)` — ручной контроль транзакций.
+
+### `DynamicDatabase` / `DynamicTable<T>`
+
+- `DynamicDatabase` — реестр таблиц.
+- `DynamicTable<T>` — CRUD API для конкретной сущности.
+
+## Пошагово: от нуля до рабочих запросов
+
+### 1) Подключение
+
+```java
+DatabaseManager manager = new DatabaseManager();
+
+DatabaseConfig config = DatabaseConfig.builder(DatabaseType.MYSQL)
+    .host("localhost")
+    .port(3306)
+    .database("nexttraps")
+    .username("root")
+    .password("password")
+    .property("maximumPoolSize", "10")
+    .property("minimumIdle", "2")
+    .property("connectionTimeout", "30000")
+    .build();
+
+DatabaseClient client = manager.register("main", config);
+```
+
+Что важно по параметрам пула:
+
+- `maximumPoolSize` — верхняя граница одновременных соединений.
+- `minimumIdle` — сколько idle-соединений держать заранее.
+- `connectionTimeout` — сколько ждать свободное соединение.
+
+### 2) Сущность
+
+```java
+@AllArgsConstructor
+@Getter
+public class PlayerEntity {
+    @PrimaryKey
+    private final UUID id;
+    private final String nickname;
+    private final Integer coins;
+    private final Instant lastLogin;
+}
+```
+
+Требования:
+
+- должен быть конструктор по всем полям,
+- порядок параметров конструктора = порядок полей,
+- `@PrimaryKey` помечает первичный ключ,
+- если `@PrimaryKey` не указан, ключом станет первое поле.
+
+### 3) Регистрация таблицы
+
+```java
+DynamicDatabase database = new DynamicDatabase(client);
+DynamicTable<PlayerEntity> players = database.register("players", PlayerEntity.class);
+```
+
+Если таблицы нет — она создастся автоматически.
+
+## CRUD с пояснением параметров
+
+### `create(entity)`
+
+```java
+players.create(new PlayerEntity(id, "chi2l3s", 1000, Instant.now()));
+```
+
+- `entity` — объект, поля которого будут записаны в колонки таблицы.
+
+### `findFirst().where(field, value).execute()`
+
+```java
+Optional<PlayerEntity> one = players.findFirst()
+    .where("id", id)
+    .execute();
+```
+
+- `field` — **имя Java-поля** сущности (не SQL alias).
+- `value` — значение фильтра.
+- результат: `Optional<T>`.
+
+### `findMany()`
+
+```java
+List<PlayerEntity> rich = players.findMany()
+    .where("coins", QueryOperator.GREATER_THAN, 1000)
+    .execute();
+```
+
+- возвращает список, может быть пустым.
+
+### `update().set(...).where(...).execute()`
+
+```java
+int updated = players.update()
+    .set("coins", 1500)
+    .set("lastLogin", Instant.now())
+    .where("id", id)
+    .execute();
+```
+
+- `set(field, value)` — какое поле обновить и на какое значение.
+- `where(...)` — фильтр строк, которые будут обновлены.
+- результат: количество изменённых строк.
+
+## Операторы и когда их применять
+
+- `EQUALS`, `NOT_EQUALS` — точное сравнение.
+- `GREATER_THAN`, `LESS_THAN`, `..._OR_EQUALS` — числовые диапазоны.
+- `LIKE`, `NOT_LIKE` — поиск по шаблону (`%text%`).
+- `IN`, `NOT_IN` — выборка по множеству значений.
+- `BETWEEN` — диапазон от и до.
+- `IS_NULL`, `IS_NOT_NULL` — проверка null.
+
+Пример комбинирования:
+
+```java
+players.findMany()
+    .where("coins", QueryOperator.GREATER_THAN, 500)
+    .whereLike("nickname", "Pro%")
+    .whereIsNotNull("lastLogin")
+    .execute();
+```
+
+Все условия объединяются через `AND`.
+
+## Транзакции: когда нужны и как делать
+
+Используйте транзакции, когда несколько операций должны пройти как единое целое.
+
+```java
+client.withConnection(connection -> {
+    connection.setAutoCommit(false);
+    try {
+        players.create(first);
+        players.create(second);
+        connection.commit();
+        return true;
+    } catch (Exception e) {
+        connection.rollback();
+        throw e;
+    }
+});
+```
+
+## Частые ошибки и как избежать
+
+### `Failed to resolve constructor`
+
+Причина: конструктор сущности не совпадает с полями.
+
+Проверьте:
+
+- полный набор параметров,
+- порядок,
+- типы.
+
+### `Unknown field '...'`
+
+Причина: опечатка в `where("...")` или `set("...")`.
+
+Используйте имена полей из Java-класса 1 в 1.
+
+### Медленные запросы
+
+Что делать:
+
+- добавить индексы вручную,
+- оптимизировать `where` по индексируемым полям,
+- использовать batch для массовых вставок.
+
+## Ограничения модуля
+
+- Нет автоматических миграций схемы уровня полноценной ORM.
+- Для сложных cross-table сценариев лучше писать явный SQL через `DatabaseClient`.
+
+<Note>
+Лучший рабочий паттерн: `DynamicTable` для повседневного CRUD + `DatabaseClient` для транзакций, индексов и сложных SQL.
+</Note>

@@ -1,0 +1,122 @@
+---
+title: Быстрый старт
+description: Минимальный рабочий путь от пустого плагина до GUI и записи в базу.
+order: 3
+---
+
+# Быстрый старт
+
+Ниже сценарий, который даст рабочий результат за 10-15 минут:
+
+1. Инициализация базы и GUI в `onEnable`.
+2. Создание первой сущности.
+3. Создание YAML-меню и открытие игроку.
+4. Первая запись и обновление в БД.
+
+## 1. Инициализация в плагине
+
+```java
+public final class MyPlugin extends JavaPlugin {
+    private DatabaseManager databaseManager;
+    private DynamicDatabase dynamicDatabase;
+    private DynamicTable<PlayerEntity> players;
+    private GuiManager guiManager;
+
+    @Override
+    public void onEnable() {
+        databaseManager = new DatabaseManager();
+
+        DatabaseConfig config = DatabaseConfig.builder(DatabaseType.SQLITE)
+            .file(getDataFolder() + "/database.db")
+            .property("maximumPoolSize", "5")
+            .build();
+
+        DatabaseClient client = databaseManager.register("main", config);
+        dynamicDatabase = new DynamicDatabase(client);
+        players = dynamicDatabase.register("players", PlayerEntity.class);
+
+        guiManager = new GuiManager(this);
+        guiManager.loadFromFolder(new File(getDataFolder(), "menus"));
+    }
+
+    @Override
+    public void onDisable() {
+        if (databaseManager != null) {
+            databaseManager.close();
+        }
+    }
+}
+```
+
+Что важно в этом шаге:
+
+- `register("main", config)` открывает именованное подключение.
+- `dynamicDatabase.register("players", PlayerEntity.class)` связывает Java-класс с таблицей.
+- `loadFromFolder(...)` загружает YAML-меню из папки.
+
+## 2. Опишите сущность
+
+```java
+@AllArgsConstructor
+@Getter
+public class PlayerEntity {
+    @PrimaryKey
+    private final UUID id;
+    private final String nickname;
+    private final Integer coins;
+}
+```
+
+Роль полей:
+
+- `id`: первичный ключ записи.
+- `nickname`: ник, который хранится в таблице.
+- `coins`: баланс для примера CRUD-операций.
+
+## 3. Создайте первое GUI меню
+
+`plugins/<plugin>/menus/main.yml`:
+
+```yaml
+title: "&8Main"
+size: 27
+items:
+  reward:
+    material: DIAMOND
+    slot: 13
+    name: "&bПолучить награду"
+    on_left_click:
+      - "message &aНаграда выдана"
+      - "playsound ENTITY_PLAYER_LEVELUP 1.0 1.0"
+```
+
+Открытие:
+
+```java
+guiManager.openGui(player, "main");
+```
+
+Ожидаемый результат: у игрока открывается меню 27 слотов, клик по предмету запускает заданные действия.
+
+## 4. Первый CRUD
+
+```java
+players.create(new PlayerEntity(player.getUniqueId(), player.getName(), 100));
+
+int updated = players.update()
+    .set("coins", 150)
+    .where("id", player.getUniqueId())
+    .execute();
+```
+
+Что здесь происходит:
+
+- `create(...)` вставляет новую строку в таблицу `players`.
+- `update().set(...).where(...).execute()` обновляет только запись текущего игрока.
+- `updated` содержит число изменённых строк.
+
+## Что читать дальше
+
+- [Dynamic Database](/ru/docs/modules/dynamic-database)
+- [GUI API](/ru/docs/modules/gui-api)
+- [Command API](/ru/docs/modules/command-api)

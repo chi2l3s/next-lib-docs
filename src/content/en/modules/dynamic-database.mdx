@@ -1,0 +1,92 @@
+---
+title: Dynamic Database
+description: "Code-level Dynamic Database reference for NextLib 1.0.7."
+order: 10
+---
+
+# Dynamic Database
+
+This guide reflects the actual code in `api/database/*` and `api/database/dynamic/*`.
+
+## Supported engines
+
+- MySQL
+- PostgreSQL
+- SQLite
+
+## Core classes
+
+- `DatabaseManager`
+- `DatabaseConfig`
+- `DatabaseClient`
+- `DynamicDatabase`
+- `DynamicTable<T>`
+- `QueryOperator`
+
+## Entity rules
+
+- Constructor must include all declared instance fields in declaration order
+- `@PrimaryKey` marks primary key
+- If missing, first field is used as primary key
+
+```java
+@AllArgsConstructor
+@Getter
+public class PlayerEntity {
+    @PrimaryKey
+    private final UUID id;
+    private final String nickname;
+    private final Integer coins;
+    private final Instant lastLogin;
+}
+```
+
+## Registration
+
+```java
+DatabaseClient client = manager.register("main", config);
+DynamicDatabase db = new DynamicDatabase(client);
+DynamicTable<PlayerEntity> players = db.register("players", PlayerEntity.class);
+```
+
+## CRUD examples
+
+```java
+players.create(new PlayerEntity(id, "chi2l3s", 1000, Instant.now()));
+
+Optional<PlayerEntity> one = players.findFirst()
+    .where("id", id)
+    .execute();
+
+List<PlayerEntity> many = players.findMany()
+    .where("coins", QueryOperator.GREATER_THAN, 500)
+    .execute();
+
+players.update()
+    .set("coins", 1500)
+    .where("id", id)
+    .execute();
+```
+
+## Advanced filters
+
+```java
+players.findMany().whereLike("nickname", "%chi%").execute();
+players.findMany().whereIn("nickname", "Alex", "Mira").execute();
+players.findMany().whereBetween("coins", 100, 2000).execute();
+players.findMany().whereIsNull("lastLogin").execute();
+```
+
+## Supported Java field types
+
+- `String`, `UUID`
+- `int/Integer`, `short/Short`, `long/Long`
+- `float/Float`, `double/Double`
+- `boolean/Boolean`
+- `Instant`
+
+## Notes
+
+- Conditions in query builder are combined with `AND`
+- Schema migrations are manual (`ALTER TABLE`)
+- Add indexes manually for hot lookup fields

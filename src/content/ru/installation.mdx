@@ -1,0 +1,92 @@
+---
+title: Установка
+description: Пошаговое подключение NextLib через JitPack и обязательные зависимости для разных модулей.
+order: 2
+---
+
+# Установка
+
+Эта страница отвечает на три вопроса:
+
+1. Как подключить NextLib к проекту.
+2. Какие зависимости нужны для Dynamic Database.
+3. Какие минимальные условия в `plugin.yml` для Command API.
+
+## 1. Подключите библиотеку
+
+### Gradle (Kotlin DSL)
+
+```kotlin
+repositories {
+    mavenCentral()
+    maven("https://jitpack.io")
+}
+
+dependencies {
+    compileOnly("com.github.chi2l3s:next-lib:1.0.7")
+}
+```
+
+### Gradle (Groovy DSL)
+
+```groovy
+repositories {
+    mavenCentral()
+    maven { url 'https://jitpack.io' }
+}
+
+dependencies {
+    compileOnly 'com.github.chi2l3s:next-lib:1.0.7'
+}
+```
+
+### Maven
+
+```xml
+<repositories>
+  <repository>
+    <id>jitpack</id>
+    <url>https://jitpack.io</url>
+  </repository>
+</repositories>
+
+<dependency>
+  <groupId>com.github.chi2l3s</groupId>
+  <artifactId>next-lib</artifactId>
+  <version>1.0.7</version>
+  <scope>provided</scope>
+</dependency>
+```
+
+## 2. Добавьте JDBC драйвер под вашу базу
+
+Для модуля Dynamic Database драйвер обязателен в runtime classpath.
+
+```gradle
+dependencies {
+    implementation 'mysql:mysql-connector-java:8.0.33'
+    implementation 'org.postgresql:postgresql:42.6.0'
+    implementation 'org.xerial:sqlite-jdbc:3.43.0.0'
+}
+```
+
+Как выбирать:
+
+- MySQL: `mysql:mysql-connector-java`
+- PostgreSQL: `org.postgresql:postgresql`
+- SQLite: `org.xerial:sqlite-jdbc`
+
+## 3. Проверьте `plugin.yml` для команд
+
+Если регистрируете команды через `CommandRegistry`, команда должна существовать в `plugin.yml`.
+
+```yaml
+commands:
+  nextlib:
+    description: Main command
+    usage: /nextlib
+```
+
+<Warning>
+Ошибка `Missing JDBC driver for ...` почти всегда означает, что JDBC-зависимость есть в IDE, но отсутствует в runtime jar/класспасе сервера.
+</Warning>

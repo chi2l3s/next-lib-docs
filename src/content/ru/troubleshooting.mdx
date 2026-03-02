@@ -1,0 +1,70 @@
+---
+title: Troubleshooting
+description: Типичные проблемы по текущей реализации NextLib 1.0.7.
+order: 20
+---
+
+# Troubleshooting
+
+## Dynamic Database
+
+### Missing JDBC driver
+
+Причина: отсутствует JDBC-драйвер в runtime.
+
+Решение:
+
+- добавьте драйвер в зависимости
+- проверьте shading/packaging
+
+### Failed to resolve constructor
+
+Причина: `EntityMetadata` не нашёл подходящий конструктор.
+
+Решение:
+
+- конструктор должен включать все поля
+- порядок параметров = порядок полей
+
+### Unknown field '...'
+
+Причина: опечатка в `where("field", ...)`/`set("field", ...)`.
+
+Решение: используйте точные имена Java-полей сущности.
+
+### Медленные запросы
+
+Решение:
+
+- добавить индексы вручную
+- увеличить `maximumPoolSize`
+- использовать `executeBatch` для bulk вставок
+
+## GUI API
+
+### Меню не находится
+
+Причина: ID берётся из имени файла.
+
+Решение: `menus/main.yml` открывается как `openGui(player, "main")`.
+
+### onLeftClick не срабатывает
+
+Причина: в коде ключи snake_case.
+
+Решение: используйте `on_left_click` и `on_right_click`.
+
+### visible_when/hidden_when не работают
+
+Причина: текущий `GuiLoader` не применяет эти ключи.
+
+Решение:
+
+- используйте только `enchanted_when`
+- либо расширьте `GuiLoader` в вашем форке
+
+### Unknown GUI action/condition в логах
+
+Причина: действие/условие не зарегистрировано.
+
+Решение: `Actions.registerAction(...)` и `Conditions.registerCondition(...)` в `onEnable()`.

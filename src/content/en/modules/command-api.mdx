@@ -1,0 +1,29 @@
+---
+title: Command API
+description: Detailed command flow with LongCommandExecutor and SubCommand.
+order: 12
+---
+
+# Command API
+
+## Building blocks
+
+- `SubCommand`
+- `LongCommandExecutor`
+- `CommandRegistry`
+
+`LongCommandExecutor` routes by `args[0]` alias, validates permission, then executes subcommand.
+
+```java
+public class MainCommand extends LongCommandExecutor {
+    public MainCommand() {
+        addSubCommand(new ReloadSub(), new String[]{"reload", "rl"}, new Permission("my.reload"));
+    }
+}
+```
+
+```java
+new CommandRegistry(this).registerCommand("nextlib", new MainCommand());
+```
+
+If a command is missing in `plugin.yml`, registry logs a warning.

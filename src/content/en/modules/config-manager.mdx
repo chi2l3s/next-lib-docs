@@ -1,0 +1,30 @@
+---
+title: Config Manager
+description: BaseConfig workflow with auto-create and optional update.
+order: 15
+---
+
+# Config Manager
+
+`BaseConfig` wraps YAML loading and optional updates via ConfigUpdater.
+
+```java
+public final class MainConfig extends BaseConfig {
+    public MainConfig(JavaPlugin plugin) {
+        super(plugin, "config.yml", true);
+        reloadConfig();
+    }
+
+    @Override
+    protected void loadValues() {
+        // map config values
+    }
+}
+```
+
+`reloadConfig()`:
+
+- creates file from plugin resources if missing
+- loads `YamlConfiguration`
+- optionally calls `ConfigUpdater.update(...)`
+- invokes `loadValues()`

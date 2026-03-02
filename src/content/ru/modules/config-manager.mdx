@@ -1,0 +1,82 @@
+---
+title: Config Manager
+description: "Подробный разбор BaseConfig: конструкторы, reloadConfig, loadValues и типовые ошибки."
+order: 15
+---
+
+# Config Manager
+
+`BaseConfig` нужен, чтобы унифицировать работу с YAML-конфигами:
+
+- гарантированно создать файл, если его нет;
+- загрузить `YamlConfiguration`;
+- обновить структуру конфига через `ConfigUpdater`;
+- централизованно перечитать значения в поля класса.
+
+## Конструкторы
+
+```java
+BaseConfig(JavaPlugin plugin, String fileName, boolean update)
+BaseConfig(JavaPlugin plugin, String fileName)
+```
+
+Параметры:
+
+| Аргумент | Что означает |
+| --- | --- |
+| `plugin` | Экземпляр вашего JavaPlugin |
+| `fileName` | Имя yaml-файла в папке плагина |
+| `update` | Нужно ли выполнять обновление структуры через `ConfigUpdater` |
+
+Если используется конструктор без `update`, применяется `update=true`.
+
+## Как работает `reloadConfig()`
+
+1. Если файл отсутствует, копируется ресурс из jar.
+2. Загружается `YamlConfiguration` в поле `config`.
+3. При `update=true` вызывается `ConfigUpdater.update(...)`.
+4. Вызывается ваш `loadValues()`.
+
+Итог: после `reloadConfig()` поля вашего класса должны содержать актуальные значения из файла.
+
+## Обязательная часть наследника
+
+```java
+protected abstract void loadValues();
+```
+
+В `loadValues()` переносите значения из `config` в типизированные поля класса.
+
+## Пример
+
+```java
+public final class MainConfig extends BaseConfig {
+    private int maxPlayers;
+
+    public MainConfig(JavaPlugin plugin) {
+        super(plugin, "config.yml", true);
+        reloadConfig();
+    }
+
+    @Override
+    protected void loadValues() {
+        maxPlayers = config.getInt("limits.maxPlayers", 50);
+    }
+
+    public int getMaxPlayers() {
+        return maxPlayers;
+    }
+}
+```
+
+## Рекомендации
+
+- Держите парсинг только в `loadValues()`.
+- В бизнес-коде используйте getters, а не прямой доступ к `config`.
+- После ручного изменения файла на диске вызывайте `reloadConfig()`.
+
+## Частые ошибки
+
+1. Чтение значений до первого `reloadConfig()`.
+2. Отсутствие default-файла в ресурсах при ожидании `saveResource`.
+3. Смешивание логики загрузки и бизнес-логики в одном методе.

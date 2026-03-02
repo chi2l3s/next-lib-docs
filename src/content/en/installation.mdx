@@ -1,0 +1,65 @@
+---
+title: Installation
+description: Install NextLib from JitPack and prepare runtime dependencies.
+order: 2
+---
+
+# Installation
+
+## Gradle (Kotlin DSL)
+
+```kotlin
+repositories {
+    mavenCentral()
+    maven("https://jitpack.io")
+}
+
+dependencies {
+    compileOnly("com.github.chi2l3s:next-lib:1.0.7")
+}
+```
+
+## Gradle (Groovy DSL)
+
+```groovy
+repositories {
+    mavenCentral()
+    maven { url 'https://jitpack.io' }
+}
+
+dependencies {
+    compileOnly 'com.github.chi2l3s:next-lib:1.0.7'
+}
+```
+
+## Maven
+
+```xml
+<repositories>
+  <repository>
+    <id>jitpack</id>
+    <url>https://jitpack.io</url>
+  </repository>
+</repositories>
+
+<dependency>
+  <groupId>com.github.chi2l3s</groupId>
+  <artifactId>next-lib</artifactId>
+  <version>1.0.7</version>
+  <scope>provided</scope>
+</dependency>
+```
+
+## JDBC drivers
+
+```gradle
+dependencies {
+    implementation 'mysql:mysql-connector-java:8.0.33'
+    implementation 'org.postgresql:postgresql:42.6.0'
+    implementation 'org.xerial:sqlite-jdbc:3.43.0.0'
+}
+```
+
+## plugin.yml
+
+If you use `CommandRegistry`, command entries must exist in `plugin.yml`.

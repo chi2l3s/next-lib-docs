@@ -1,0 +1,195 @@
+---
+title: GUI API
+description: "Понятное руководство по GUI API: структура, поля YAML, действия, условия и ограничения runtime."
+order: 11
+---
+
+# GUI API
+
+GUI API в NextLib — это YAML-driven меню с обработчиками клика и условиями.
+
+## Что делает модуль
+
+- Загружает меню из `.yml` файлов.
+- Преобразует элементы YAML в `GuiItem`.
+- Вешает действия на левый/правый клик.
+- Позволяет подсвечивать предметы через условия (`enchanted_when`).
+
+## Важные особенности текущей реализации
+
+Это критично, чтобы не тратить время на “почему не работает”:
+
+- ID меню берётся из **имени файла**, а не из поля `id` в YAML.
+- Поддерживаются ключи клика в snake_case: `on_left_click`, `on_right_click`.
+- `visible_when` и `hidden_when` в runtime сейчас не применяются.
+- `enchanted_when` работает.
+- Загрузка идёт по `.yml` в заданной папке (без рекурсии подпапок).
+
+## Быстрый запуск
+
+```java
+GuiManager guiManager = new GuiManager(this);
+guiManager.loadFromFolder(new File(getDataFolder(), "menus"));
+```
+
+Открытие:
+
+```java
+guiManager.openGui(player, "main");
+```
+
+Где `main` — это `main.yml`.
+
+## YAML: что означает каждый параметр
+
+Базовая структура:
+
+```yaml
+title: "&8Главное меню"
+size: 27
+items:
+  shop:
+    material: EMERALD
+    amount: 1
+    slot: 11
+    name: "&aМагазин"
+    lore:
+      - "&7Купить предметы"
+    on_left_click:
+      - "opengui shop"
+```
+
+### Параметры меню
+
+- `title` — заголовок инвентаря (поддерживает цвет-коды).
+- `size` — размер инвентаря (обычно 9/18/27/36/45/54).
+- `items` — словарь элементов.
+
+### Параметры элемента
+
+- `material` — материал из Bukkit `Material`.
+- `amount` — количество в стаке.
+- `slot` — одиночный слот.
+- `slots` — массив слотов/диапазонов (`"0-8"`, `"13"`).
+- `name` — display name.
+- `lore` — список строк лора.
+- `on_left_click` / `on_right_click` — список действий.
+- `enchanted_when` — список условий для подсветки.
+
+## Слоты: как правильно задавать
+
+### Один слот
+
+```yaml
+slot: 13
+```
+
+### Несколько и диапазоны
+
+```yaml
+slots:
+  - "0-8"
+  - "10"
+  - "18-26"
+```
+
+Если слот выходит за границы `size`, элемент игнорируется с warning в лог.
+
+## Actions: что делает каждый тип
+
+Встроенные действия:
+
+- `close` — закрыть меню.
+- `command <cmd>` — выполнить команду от игрока.
+- `console <cmd>` — выполнить от консоли.
+- `message <text>` — отправить сообщение игроку.
+- `opengui <id>` — открыть другое меню.
+- `update` — обновить текущее меню.
+- `playsound <sound> <volume> <pitch>` — проиграть звук.
+
+Пример цепочки:
+
+```yaml
+on_left_click:
+  - "console give %player% diamond 1"
+  - "message &aГотово"
+  - "playsound ENTITY_PLAYER_LEVELUP 1.0 1.0"
+```
+
+### Аргументы действий
+
+- `%player%` заменяется на имя игрока.
+- для `playsound`:
+- `sound` — enum Bukkit `Sound`,
+- `volume` — громкость (float),
+- `pitch` — высота тона (float).
+
+Если звук невалидный, действие молча заменяется на no-op и пишет warning.
+
+## Conditions: как устроены
+
+Встроенные:
+
+- `always` — всегда true.
+- `never` — всегда false.
+
+Регистрация своих условий:
+
+```java
+Conditions.registerCondition("has_perm", (manager, args) ->
+    player -> player.hasPermission(args)
+);
+```
+
+Использование:
+
+```yaml
+enchanted_when:
+  - "has_perm myplugin.vip"
+```
+
+Если хотя бы одно условие true — предмет получает скрытый enchant glow.
+
+## Программное меню
+
+Когда YAML неудобен, можно собрать GUI кодом:
+
+```java
+Gui gui = guiManager.createGui("custom", "&8Custom", 27);
+GuiItem item = new GuiItem(new ItemStack(Material.DIAMOND), 13);
+item.addLeftClickAction(player -> player.sendMessage("§aClick"));
+gui.addItem(item);
+```
+
+## Практика организации
+
+- Держите имена файлов короткими и стабильными (`main.yml`, `shop.yml`).
+- Для больших GUI делайте отдельные файлы на каждый экран.
+- После изменения YAML используйте `guiManager.reloadAll()`.
+
+## Частые проблемы
+
+### “GUI не найден”
+
+Чаще всего неверный ID в `openGui(player, id)`.
+
+Проверьте имя файла: `shop.yml` -> `shop`.
+
+### “Клики не работают”
+
+Проверьте ключи:
+
+- должно быть `on_left_click`,
+- а не `onLeftClick`.
+
+### “Условие не срабатывает”
+
+Проверьте:
+
+- условие зарегистрировано,
+- имя совпадает (case-sensitive),
+- аргументы корректно парсятся в обработчике.
+
+<Warning>
+Поля `visible_when` и `hidden_when` в текущем runtime-коде не участвуют в отрисовке. Если они есть в старых гайдах, это рассинхрон документации и реализации.
+</Warning>

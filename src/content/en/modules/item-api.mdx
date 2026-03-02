@@ -1,0 +1,37 @@
+---
+title: Item API
+description: ItemBuilder and ItemUtil reference based on current source.
+order: 13
+---
+
+# Item API
+
+## ItemBuilder methods
+
+- `setName`
+- `setLore`
+- `addEnchant` / `addEnchants`
+- `setUnbreakable`
+- `addFlags`
+- `setSkullOwner`
+- `setPersistentData` (String/int overloads)
+- `build`
+
+```java
+ItemStack reward = new ItemBuilder(Material.DIAMOND)
+    .setName("&bDaily Reward")
+    .setLore("&7Click to claim")
+    .setPersistentData(plugin, "reward_id", "daily")
+    .build();
+```
+
+## ItemUtil helpers
+
+- `hasPersistentData`
+- `getStringData`
+- `getIntData`
+- `isSimilar` (ignores amount)
+
+<Warning>
+`glow()` and `addPersistentTag(...)` are not part of current `ItemBuilder` implementation.
+</Warning>

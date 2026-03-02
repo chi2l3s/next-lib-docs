@@ -1,0 +1,51 @@
+---
+title: Quick Start
+description: Minimal but correct startup flow for NextLib 1.0.7.
+order: 3
+---
+
+# Quick Start
+
+```java
+public final class MyPlugin extends JavaPlugin {
+    private DatabaseManager databaseManager;
+    private DynamicDatabase dynamicDatabase;
+    private DynamicTable<PlayerEntity> players;
+    private GuiManager guiManager;
+
+    @Override
+    public void onEnable() {
+        databaseManager = new DatabaseManager();
+
+        DatabaseConfig config = DatabaseConfig.builder(DatabaseType.SQLITE)
+            .file(getDataFolder() + "/database.db")
+            .build();
+
+        DatabaseClient client = databaseManager.register("main", config);
+        dynamicDatabase = new DynamicDatabase(client);
+        players = dynamicDatabase.register("players", PlayerEntity.class);
+
+        guiManager = new GuiManager(this);
+        guiManager.loadFromFolder(new File(getDataFolder(), "menus"));
+    }
+
+    @Override
+    public void onDisable() {
+        if (databaseManager != null) databaseManager.close();
+    }
+}
+```
+
+Menu example (`menus/main.yml`):
+
+```yaml
+title: "&8Main"
+size: 27
+items:
+  reward:
+    material: DIAMOND
+    slot: 13
+    name: "&bClaim reward"
+    on_left_click:
+      - "message &aReward granted"
+```
