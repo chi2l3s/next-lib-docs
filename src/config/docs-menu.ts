@@ -36,12 +36,20 @@ const configuredSections: ConfigSection[] = [
       "modules/item-api",
       "modules/color-api",
       "modules/config-manager",
+      "modules/nextlib-context",
+      "modules/quests-api",
+      "modules/validation-api",
+      "modules/reload-api",
+      "modules/observability-api",
+      "modules/i18n-api",
+      "modules/messaging-api",
+      "modules/utilities-api",
     ],
   },
   {
     id: "operations",
     title: { ru: "Эксплуатация", en: "Operations" },
-    slugs: ["api-reference", "changelog", "troubleshooting", "release-notes", "roadmap"],
+    slugs: ["api-reference", "cookbook", "glossary", "changelog", "troubleshooting", "release-notes", "roadmap"],
   },
 ];
 

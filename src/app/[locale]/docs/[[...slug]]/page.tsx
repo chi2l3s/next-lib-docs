@@ -53,6 +53,7 @@ export default async function DocPage({
 
   const content = await renderMdx(doc.body);
   const headings = extractHeadings(doc.body);
+  const readMinutes = Math.max(1, Math.round(doc.body.split(/\s+/).filter(Boolean).length / 220));
   const updated = new Intl.DateTimeFormat(typedLocale === "ru" ? "ru-RU" : "en-US", {
     day: "2-digit",
     month: "short",
@@ -64,11 +65,17 @@ export default async function DocPage({
   return (
     <div className="mx-auto flex max-w-6xl gap-8 py-4">
       <article className="min-w-0 max-w-4xl flex-1">
+        <nav className="mb-3 text-xs font-semibold opacity-70">
+          {typedLocale === "ru" ? "Документация" : "Documentation"} / {doc.title}
+        </nav>
         <h1 className="mb-2 text-3xl font-bold tracking-tight">{doc.title}</h1>
         {doc.description ? <p className="mb-4 text-sm opacity-80">{doc.description}</p> : null}
         <div className="mb-6 flex flex-wrap items-center gap-3 text-xs opacity-75">
           <span>
             {messages.updated}: {updated}
+          </span>
+          <span>
+            {typedLocale === "ru" ? "Чтение" : "Read"}: ~{readMinutes} {typedLocale === "ru" ? "мин" : "min"}
           </span>
           {editUrl ? (
             <a href={editUrl} target="_blank" rel="noreferrer" className="rounded-lg border px-2 py-1">

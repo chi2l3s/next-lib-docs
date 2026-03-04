@@ -1,0 +1,233 @@
+---
+title: Validation API
+description: "Очень подробное руководство по Validation API: контракт, композиция, стратегии ошибок, локализация, тестирование и шаблоны для больших проектов."
+order: 16
+---
+
+# Validation API
+
+Validation API в NextLib предназначен для системного контроля входных данных. Этот модуль особенно полезен, когда проект растёт: десятки команд, GUI вводы, DTO для API, конфиги, данные миграций.
+
+## 1. Зачем нужен отдельный слой валидации
+
+Без выделенного слоя обычно происходит следующее:
+
+- проверки размазаны по обработчикам;
+- правила дублируются;
+- ошибки пользователю выдаются непоследовательно;
+- тестировать валидацию сложно.
+
+Validation API переводит проверки в единый декларативный стиль.
+
+## 2. Модель модуля
+
+- `Validator<T>` — функция проверки объекта типа `T`.
+- `ValidationError` — ошибка по полю (`field`, `code`, `message`).
+- `ValidationResult` — агрегат ошибок.
+- `ValidationException` — fail-fast исключение на невалидном результате.
+- `Validators` — фабрики и композиция валидаторов.
+
+## 3. Базовый контракт `Validator<T>`
+
+Логика простая: валидатор получает `T`, возвращает `ValidationResult`.
+
+Это значит:
+
+- валидаторы должны быть детерминированными;
+- без скрытых side-effects;
+- без зависимости от внешнего mutable state, если это возможно.
+
+## 4. Готовые валидаторы из `Validators`
+
+### `notBlank(fieldName)`
+
+Проверяет, что строка не null и не пустая после trim.
+
+### `maxLength(fieldName, maxLength)`
+
+Проверяет длину строки.
+
+### `pattern(fieldName, pattern, message)`
+
+Проверяет regex-соответствие.
+
+### `range(fieldName, min, max)`
+
+Проверяет числовой диапазон inclusive.
+
+### `notEmpty(fieldName)`
+
+Проверка непустой коллекции.
+
+### `requireNonNull(fieldName)`
+
+Проверка на null.
+
+## 5. `Validators.field(...)` подробно
+
+Это ключевой строительный метод.
+
+```java
+Validator<CreateQuestRequest> nameValidator = Validators.field(
+    "name",
+    CreateQuestRequest::name,
+    value -> value != null && !value.isBlank(),
+    "not_blank",
+    "name is required"
+);
+```
+
+Разбор аргументов:
+
+- `fieldName`: имя поля в итоговой ошибке.
+- `extractor`: как достать поле из объекта.
+- `predicate`: правило проверки.
+- `code`: машинный код ошибки.
+- `message`: дефолтный текст.
+
+## 6. Композиция валидаторов
+
+```java
+Validator<CreateQuestRequest> validator = Validators.compose(List.of(
+    Validators.field("id", CreateQuestRequest::id,
+        v -> v != null && v.matches("[a-z0-9_\\-]{3,64}"),
+        "id_format", "id must match [a-z0-9_-]{3,64}"),
+
+    Validators.field("name", CreateQuestRequest::name,
+        v -> v != null && !v.isBlank(),
+        "not_blank", "name is required"),
+
+    Validators.field("description", CreateQuestRequest::description,
+        v -> v != null && v.length() <= 512,
+        "max_length", "description must be <= 512")
+));
+```
+
+Плюс композиции: можно вернуть пользователю сразу все проблемы, а не по одной за попытку.
+
+## 7. `ValidationResult`: стратегии использования
+
+### Стратегия A: мягкая (recommended для UI/команд)
+
+- `if (!result.isValid()) return errors`.
+
+### Стратегия B: fail-fast (внутренние сервисы)
+
+- `result.throwIfInvalid()`.
+
+### Стратегия C: многослойная
+
+- валидировать отдельно синтаксис, бизнес-ограничения, доступность ресурсов;
+- объединить через `merge(...)`.
+
+## 8. Интеграция с Command API
+
+```java
+ValidationResult result = createQuestValidator.validate(request);
+if (!result.isValid()) {
+    for (ValidationError e : result.getErrors()) {
+        sender.sendMessage("Field=" + e.field() + ", code=" + e.code() + ", msg=" + e.message());
+    }
+    return;
+}
+```
+
+Практика: команды не должны бросать stacktrace игроку из-за невалидного ввода.
+
+## 9. Интеграция с i18n
+
+Используйте `code` как i18n ключ:
+
+```java
+String text = i18n.message(locale, "validation." + error.code(), Map.of(
+    "field", error.field()
+));
+```
+
+Это избавляет от hardcoded текстов в Java-коде.
+
+## 10. Границы ответственности
+
+Validation API отвечает за:
+
+- формат,
+- диапазон,
+- обязательность,
+- структуру.
+
+Validation API не должен решать:
+
+- авторизацию;
+- транзакционную консистентность;
+- сложные бизнес-решения «можно ли сейчас выполнить операцию» (это уровень сервиса/домена).
+
+## 11. Паттерны для крупных проектов
+
+### Паттерн A: Validator per use-case
+
+- `CreateQuestValidator`
+- `UpdateProfileValidator`
+- `TransferCoinsValidator`
+
+### Паттерн B: Shared rule building blocks
+
+- `IdRules`
+- `NameRules`
+- `PaginationRules`
+
+### Паттерн C: Validation mapping layer
+
+Преобразование `ValidationError` -> API response / chat message / GUI tooltip.
+
+## 12. Антипаттерны
+
+- Валидатор делает DB запросы.
+- Predicate кидает runtime exceptions.
+- Код ошибки не стабилен между релизами.
+- Порядок ошибок рандомный и непредсказуемый.
+
+## 13. Тестирование
+
+Базовые тест-кейсы на каждый валидатор:
+
+1. happy path;
+2. boundary values;
+3. null case;
+4. malformed format;
+5. multiple simultaneous failures.
+
+Пример:
+
+```java
+@Test
+void shouldReturnTwoErrorsForInvalidRequest() {
+    CreateQuestRequest req = new CreateQuestRequest("!", "", null, List.of());
+    ValidationResult result = validator.validate(req);
+
+    assertFalse(result.isValid());
+    assertTrue(result.getErrors().size() >= 2);
+}
+```
+
+## 14. FAQ
+
+### Можно ли валидировать вложенные объекты?
+
+Да. Делайте field validator на вложенный объект и применяйте compose для подвалидаторов.
+
+### Как быть с асинхронной валидацией (например, уникальность в БД)?
+
+Оставляйте синхронные структурные проверки в Validation API, а асинхронные доменные проверки делайте в сервисе перед commit.
+
+### Можно ли использовать Validation API для конфигов?
+
+Да, это хороший сценарий: после `loadValues()` прогоняйте валидацию и логируйте ошибки как конфигурационные.
+
+## 15. Чеклист внедрения
+
+- Все входные DTO имеют валидатор.
+- Коды ошибок стабильны и локализуемы.
+- Ошибки возвращаются структурно.
+- Валидаторы покрыты юнит-тестами.
+
+При таком подходе Validation API превращается в основу качества входных данных во всём плагине.

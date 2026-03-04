@@ -1,0 +1,159 @@
+---
+title: Utilities API
+description: "Полное руководство по Utilities API: TimeUtil, ConfigUtil, единицы времени, безопасный парсинг и практики предотвращения конфиг-багов."
+order: 23
+---
+
+# Utilities API
+
+Utilities API — набор небольших утилит, которые снимают повседневную рутину и уменьшают количество мелких, но неприятных багов.
+
+## 1. Что входит в модуль
+
+Основные классы:
+
+- `TimeUtil`
+- `ConfigUtil`
+
+Эти утилиты часто используются в cooldown системах, таймерах, конфиг-парсинге, арене/мире и командных параметрах.
+
+## 2. TimeUtil
+
+### `parseTime(String input)`
+
+Преобразует человекочитаемое время в секунды.
+
+Поддержка форматов:
+
+- `30` -> 30
+- `30s` -> 30
+- `5m` -> 300
+- `2h` -> 7200
+- `1d` -> 86400
+
+Пример:
+
+```java
+int pvpCooldown = TimeUtil.parseTime("45s");
+int dailyReset = TimeUtil.parseTime("24h");
+```
+
+### Ошибки
+
+Метод бросает `IllegalArgumentException`, если:
+
+- input null/blank;
+- суффикс неизвестный;
+- значение отрицательное.
+
+Это полезно для fail-fast конфигурации.
+
+### `formatTime(int seconds)`
+
+Форматирует секунды в `m:ss`.
+
+```java
+String ui = TimeUtil.formatTime(95); // 1:35
+```
+
+Подходит для:
+
+- lore;
+- action bar;
+- статуса квеста/кулдауна.
+
+## 3. ConfigUtil
+
+### `getWorld(section, path, defaultWorldName)`
+
+```java
+World world = ConfigUtil.getWorld(config, "arena.world", "world");
+```
+
+Поведение:
+
+1. читает строку пути;
+2. fallback на default;
+3. пытается найти мир через Bukkit.
+
+Если мир не найден, вернётся `null`, это нужно обработать явно.
+
+### `parseTime(section, path, defaultValue)`
+
+```java
+int delay = ConfigUtil.parseTime(config, "arena.respawnDelay", 30);
+```
+
+Поведение:
+
+- если пути нет -> default;
+- если строка есть -> `TimeUtil.parseTime`.
+
+## 4. Практика единиц времени
+
+Одна из частых причин логических багов — смешение секунд и тиков.
+
+Рекомендуемый стандарт:
+
+- в конфиге: `s/m/h/d`;
+- внутри домена: секунды;
+- перед Bukkit scheduler: явная конверсия в тики.
+
+```java
+long ticks = seconds * 20L;
+```
+
+## 5. Типовой шаблон конфиг-класса
+
+```java
+public final class ArenaConfig extends BaseConfig {
+    private World arenaWorld;
+    private int respawnDelaySeconds;
+
+    public ArenaConfig(JavaPlugin plugin) {
+        super(plugin, "arena.yml", true);
+        reloadConfig();
+    }
+
+    @Override
+    protected void loadValues() {
+        arenaWorld = ConfigUtil.getWorld(config, "arena.world", "world");
+        respawnDelaySeconds = ConfigUtil.parseTime(config, "arena.respawnDelay", 30);
+
+        if (arenaWorld == null) {
+            plugin.getLogger().warning("arena.world points to unknown world");
+        }
+    }
+}
+```
+
+## 6. Частые ошибки
+
+- парсить время руками через `Integer.parseInt` и потерять `m/h/d`;
+- не проверять `null` world;
+- хранить время в разных единицах в разных модулях.
+
+## 7. Антипаттерны
+
+- магические числа времени по коду;
+- вручную повторять одинаковый парсинг в 20 местах;
+- default values без явного логирования, когда ключ отсутствует.
+
+## 8. Рекомендованные практики
+
+1. Все временные конфиги через `TimeUtil/ConfigUtil`.
+2. Секунды как базовая единица в домене.
+3. Явный warning при `null` world или невалидном config path.
+4. Unit тесты на критичные парсеры и boundary значения.
+
+## 9. FAQ
+
+### Можно ли расширить `TimeUtil` новыми суффиксами?
+
+Да, но желательно централизованно и с тестами, чтобы не сломать существующие конфиги.
+
+### Нужно ли хранить время в миллисекундах?
+
+Только если это действительно требуется точностью логики. Для большинства игровых сценариев секунд достаточно.
+
+Utilities API это «маленький модуль, который экономит много времени» за счёт устранения повторяемого кода и скрытых ошибок парсинга.

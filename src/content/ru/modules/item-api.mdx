@@ -1,89 +1,215 @@
 ---
 title: Item API
-description: "Подробно про ItemBuilder и ItemUtil: что делает каждый метод и как безопасно работать с PDC."
+description: "Полное руководство по Item API: ItemBuilder, PDC-метки, сравнение предметов, фабрики, безопасность и продовые паттерны."
 order: 13
 ---
 
 # Item API
 
-Item API нужен для двух вещей:
+Item API в NextLib нужен, чтобы перестать писать шумный и хрупкий код вокруг `ItemMeta`.
 
-1. Удобно собирать `ItemStack` через fluent-подход.
-2. Хранить служебные данные предмета в `PersistentDataContainer`.
+## 1. Что закрывает модуль
 
-## `ItemBuilder`
+- Fluent-сборка `ItemStack` через `ItemBuilder`.
+- Работа со служебными метками через `PersistentDataContainer`.
+- Сравнение предметов без зависимости от количества (`ItemUtil.isSimilar`).
 
-`ItemBuilder` строит предмет по шагам и возвращает готовый `ItemStack` через `build()`.
-
-### Основные методы
-
-`setName(String name)`
-
-- Вход: `name` — отображаемое имя предмета.
-- Что делает: применяет цветовой форматтер (`&` + HEX).
-- Результат: обновлённый builder.
-
-`setLore(String... lore)` / `setLore(List<String> lore)`
-
-- Вход: строки лора.
-- Что делает: форматирует каждую строку и записывает в meta.
-- Результат: обновлённый builder.
-
-`addEnchant(Enchantment enchantment, int level, boolean ignoreLevelRestriction)`
-
-| Аргумент | Что означает |
-| --- | --- |
-| `enchantment` | Тип зачарования |
-| `level` | Уровень зачарования |
-| `ignoreLevelRestriction` | Игнорировать ли лимиты vanilla-уровней |
-
-`setPersistentData(JavaPlugin plugin, String key, String value)`
-`setPersistentData(JavaPlugin plugin, String key, int value)`
-
-| Аргумент | Что означает |
-| --- | --- |
-| `plugin` | Нужен для создания `NamespacedKey` |
-| `key` | Имя ключа в PDC |
-| `value` | Значение (строка или число) |
-
-`build()`
-
-- Возвращает готовый `ItemStack`.
-- После `build()` можно продолжать менять builder, но лучше считать объект завершённым.
-
-## Пример
+## 2. Конструкторы `ItemBuilder`
 
 ```java
-ItemStack reward = new ItemBuilder(Material.DIAMOND)
-    .setName("&bНаграда")
-    .setLore(List.of("&7Ежедневный бонус", "&eНажмите для получения"))
-    .setUnbreakable(true)
-    .setPersistentData(plugin, "reward_id", "daily")
+new ItemBuilder(Material.DIAMOND)
+new ItemBuilder(Material.DIAMOND, 3)
+new ItemBuilder(Material.DIAMOND, colorUtil)
+new ItemBuilder(Material.DIAMOND, 3, colorUtil)
+```
+
+### Когда нужен custom `ColorUtil`
+
+- собственные правила форматирования,
+- единый стиль цветов между модулями,
+- поддержка специальных маркеров текста.
+
+## 3. Полный разбор методов
+
+### `setName(String name)`
+
+- форматирует строку,
+- устанавливает displayName.
+
+Рекомендация: никогда не кодируйте в имени служебные идентификаторы.
+
+### `setLore(String... lore)` / `setLore(List<String>)`
+
+- задаёт lore построчно,
+- каждый элемент форматируется.
+
+Рекомендация: lore для UX, не для бизнес-логики.
+
+### `addEnchant(Enchantment, int level, boolean ignoreLevelRestriction)`
+
+- применяет чары,
+- может игнорировать vanilla-лимиты.
+
+Используйте `ignoreLevelRestriction=true` только осознанно.
+
+### `addEnchants(Map<Enchantment, Integer>)`
+
+Пакетный вариант для набора чар.
+
+### `setUnbreakable(boolean)`
+
+Удобно для декоративных UI-предметов.
+
+### `addFlags(ItemFlag...)`
+
+Скрывает лишние атрибуты, делая item визуально «чистым».
+
+### `setSkullOwner(String playerName)`
+
+Работает только на соответствующем meta-типе (голова).
+
+### `setPersistentData(plugin, key, value)`
+
+Перегрузки:
+
+- `value: String`
+- `value: int`
+
+Это главный механизм стабильной идентификации предмета в коде.
+
+### `build()`
+
+Финализирует и возвращает `ItemStack`.
+
+## 4. Production-пример
+
+```java
+ItemStack reward = new ItemBuilder(Material.TRIPWIRE_HOOK)
+    .setName("&bЛедяной скин")
+    .setLore(List.of(
+        "&7Редкость: &bRare",
+        "&7Категория: &eTrap Skin",
+        "",
+        "&eНажмите для активации"
+    ))
+    .addEnchant(Enchantment.DURABILITY, 1, true)
+    .addFlags(ItemFlag.HIDE_ENCHANTS, ItemFlag.HIDE_ATTRIBUTES)
+    .setPersistentData(plugin, "reward_type", "trap_skin")
+    .setPersistentData(plugin, "reward_id", 101)
     .build();
 ```
 
-## `ItemUtil`
+## 5. `ItemUtil`: чтение и сравнение
 
-`ItemUtil` читает данные из уже созданных предметов и сравнивает предметы.
+### `hasPersistentData(item, plugin, key)`
 
-`hasPersistentData(item, plugin, key)`
+Проверяет, есть ли метка `STRING` или `INTEGER`.
 
-- Возвращает `true`, если ключ существует (string/int).
+### `getStringData(item, plugin, key)`
 
-`getStringData(item, plugin, key)`
+Возвращает строку или `null`.
 
-- Читает строку по ключу из PDC.
+### `getIntData(item, plugin, key)`
 
-`getIntData(item, plugin, key)`
+Возвращает int или `null`.
 
-- Читает целое число по ключу из PDC.
+### `isSimilar(first, second)`
 
-`isSimilar(first, second)`
+Сравнивает предметы без учёта `amount`.
 
-- Сравнивает предметы без учёта `amount`.
+Это полезно для:
 
-## Частые ошибки
+- GUI-кнопок,
+- токенов/купонов,
+- сервисных предметов.
 
-1. Пытаются читать int-методом значение, записанное как string.
-2. Запись делается одним `plugin` instance, чтение другим.
-3. Ожидаются методы, которых нет в текущем API.
+## 6. Архитектура предметов в больших проектах
+
+### ItemFactory
+
+Создайте класс фабрики:
+
+- `createMainMenuButton()`
+- `createQuestRewardItem(...)`
+- `createAdminTool()`
+
+Плюсы:
+
+- повторное использование,
+- единый стиль,
+- легче тестировать.
+
+### ItemIdentityPolicy
+
+Используйте единый префикс для PDC ключей:
+
+- `nextlib:gui_action`
+- `nextlib:reward_type`
+- `nextlib:reward_id`
+
+Это снижает риск конфликтов.
+
+## 7. Безопасность и анти-чит
+
+Никогда не доверяйте только displayName/lore.
+
+Проверяйте служебные PDC-теги:
+
+```java
+if (!ItemUtil.hasPersistentData(item, plugin, "reward_id")) {
+    return;
+}
+```
+
+Сервер должен определять легитимность предмета по данным, которые клиенту сложно подделать.
+
+## 8. Производительность
+
+Для массовой генерации предметов:
+
+- кешируйте шаблоны,
+- не форматируйте одинаковые строки в tight-loop без нужды,
+- избегайте лишних clone/meta-операций на горячем пути.
+
+## 9. Частые ошибки
+
+### Несовпадение типа метки
+
+Записали `String`, читаете как `Integer`.
+
+### Разные plugin namespace
+
+Записали ключ одним plugin instance, читаете другим.
+
+### Сравнение только по имени
+
+Игрок может подделать похожий предмет. Сравнивайте PDC.
+
+## 10. Антипаттерны
+
+- Бизнес-логика через lore-парсинг.
+- Хранение критичных данных в имени предмета.
+- Огромные цепочки builder прямо в listener-коде.
+
+## 11. Большой FAQ
+
+### Можно ли хранить JSON в PDC?
+
+Да, как строку, если объём небольшой и вы контролируете парсинг.
+
+### Что делать, если нужен сложный объект в метке?
+
+Лучше хранить только id и подтягивать объект из сервиса/БД.
+
+### Можно ли использовать ItemBuilder для боевых предметов, а не только GUI?
+
+Да. Но для боевой механики внимательно следите за балансом enchant/unbreakable.
+
+## 12. Чеклист качества Item-слоя
+
+- Все служебные предметы имеют PDC-метку.
+- Есть фабрика предметов, а не хаос по listeners.
+- Сравнение ключевых предметов идёт через `isSimilar` + PDC.
+- Игроку всегда видно понятное назначение предмета.
+
+При таком подходе Item API становится надёжной опорой для GUI, квестов, экономики и админ-инструментов.

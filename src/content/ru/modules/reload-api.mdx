@@ -1,0 +1,215 @@
+---
+title: Reload API
+description: "Очень подробное руководство по Reload API: проектирование hot-reload, порядок зависимостей, отказоустойчивость, отчёты и эксплуатационные практики."
+order: 17
+---
+
+# Reload API
+
+Reload API в NextLib это инфраструктурный слой для безопасной перезагрузки модулей без рестарта сервера.
+
+## 1. Зачем это нужно
+
+В живых серверах регулярно меняют:
+
+- конфиги;
+- YAML меню;
+- локализации;
+- фиче-флаги;
+- runtime кеши.
+
+Если reload не централизован, появляются «полуперезагруженные» состояния и трудно диагностируемые баги.
+
+## 2. Компоненты Reload API
+
+- `Reloadable` — единица перезагрузки (`id()`, `reload()`).
+- `ReloadManager` — реестр + выполнение reload.
+- `ReloadEntry` — результат конкретного модуля.
+- `ReloadReport` — суммарный отчёт.
+
+## 3. Регистрация reloadable
+
+```java
+ReloadManager reload = new ReloadManager();
+
+reload.register(new Reloadable() {
+    @Override
+    public String id() { return "config.main"; }
+
+    @Override
+    public void reload() {
+        mainConfig.reloadConfig();
+    }
+});
+
+reload.register(new Reloadable() {
+    @Override
+    public String id() { return "gui.menus"; }
+
+    @Override
+    public void reload() {
+        guiManager.reloadAll();
+    }
+});
+```
+
+`id` должен быть стабильным и семантическим.
+
+## 4. Структура `id`
+
+Рекомендуемый формат:
+
+- `layer.module`
+- `config.main`
+- `i18n.translations`
+- `database.pool`
+- `feature.quests`
+
+Это помогает в логах и автоматизации.
+
+## 5. Что делает `reloadAll()`
+
+Для каждого reloadable:
+
+1. стартует таймер;
+2. вызывает `reload()`;
+3. ловит исключение (если есть);
+4. пишет `ReloadEntry`;
+5. идёт дальше, не останавливая весь процесс.
+
+Плюс: один упавший модуль не блокирует остальные.
+
+## 6. Отчёт выполнения
+
+```java
+ReloadReport report = reload.reloadAll();
+
+sender.sendMessage("Reload done. OK=" + report.successful() + ", FAIL=" + report.failed());
+for (ReloadEntry e : report.entries()) {
+    sender.sendMessage((e.success() ? "[OK] " : "[FAIL] ") + e.id() + " " + e.durationMs() + "ms");
+}
+```
+
+Минимум для production: всегда показывать сводку и провалы.
+
+## 7. Точечная перезагрузка
+
+```java
+ReloadEntry one = reload.reload("gui.menus");
+if (!one.success()) {
+    logger.warning("Reload failed: " + one.error());
+}
+```
+
+Удобно для команд вида `/plugin reload gui`.
+
+## 8. Порядок зависимостей
+
+Обычно правильно так:
+
+1. `config.*`
+2. `i18n.*`
+3. `database.*` (если есть rebind)
+4. `gui.*`
+5. `feature.*`
+
+Если порядок нарушен, модули могут читать устаревший state.
+
+## 9. Идемпотентность reload
+
+Хороший reload можно вызывать много раз подряд без накопления мусора.
+
+Плохой reload:
+
+- каждый раз добавляет listener;
+- не закрывает старые ресурсы;
+- мутирует общие коллекции без очистки.
+
+Хороший reload:
+
+- сначала готовит новый state;
+- потом атомарно переключает ссылку;
+- корректно освобождает старый state.
+
+## 10. Атомарное переключение состояния
+
+Паттерн:
+
+```java
+public void reload() {
+    NewState candidate = buildFromConfig();
+    validate(candidate);
+    this.state = candidate;
+}
+```
+
+Если `buildFromConfig()` падает, старое рабочее состояние остаётся.
+
+## 11. Интеграция с NextLibContext
+
+```java
+NextLibContext context = NextLibContext.bootstrap(plugin);
+context.reload().register(...);
+```
+
+Плюс: reload становится частью общего runtime-контракта, а не локальной «добавки».
+
+## 12. Интеграция с Observability
+
+- Метрика: `reload.executed`.
+- Таймер: `reload.duration`.
+- Событие лога: `reload_completed` с `ok/fail`.
+
+Это упрощает анализ «почему после reload стало плохо».
+
+## 13. Ошибки и их причины
+
+### Reload «успешен», но состояние старое
+
+Причина: модуль не зарегистрирован или reload обновляет не все поля.
+
+### Reload зависает
+
+Причина: тяжёлые операции/блокировки на main thread.
+
+### После reload утечка памяти
+
+Причина: старые слушатели/кеши не освобождаются.
+
+## 14. Антипаттерны
+
+- Один giant reloadable на всё.
+- Скрытие исключений внутри `reload()`.
+- Нестабильные id (`temp`, `test1`).
+- Отсутствие отчетности пользователю.
+
+## 15. Operational playbook
+
+Перед выкатом:
+
+1. Проверить reload на staging.
+2. Прогнать 2-3 раза подряд.
+3. Проверить, что тайминги не растут.
+4. Проверить отсутствие duplicate listeners.
+
+При инциденте:
+
+1. выполнить точечный reload проблемного модуля;
+2. если fail повторяется — отключить feature и вернуть safe config;
+3. собрать stacktrace и метрики.
+
+## 16. FAQ
+
+### Можно ли делать async reload?
+
+Можно для тяжёлых read-only задач, но финальное переключение state делайте аккуратно и thread-safe.
+
+### Можно ли rollback автоматически?
+
+На уровне `ReloadManager` нет встроенного rollback, но можно реализовать внутри конкретного reloadable.
+
+### Нужно ли reloadить БД?
+
+Обычно нет. Чаще reload касается конфигов/GUI/локализации. Rebind БД делайте только при смене параметров подключения.
+
+Reload API это фундамент стабильной эксплуатации: когда reload управляемый, инцидентов заметно меньше.

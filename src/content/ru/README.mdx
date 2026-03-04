@@ -1,16 +1,35 @@
 ---
 title: NextLib Documentation
-description: Полная документация NextLib по исходному коду библиотеки.
+description: "Полная русская документация NextLib 1.0.8: архитектура, модули, сценарии внедрения, эксплуатация и best practices."
 order: 1
 ---
 
 # NextLib
 
-NextLib — модульная библиотека для Paper/Spigot плагинов.
+NextLib 1.0.8 — это модульная библиотека для Paper/Spigot-плагинов, которая закрывает инфраструктурный слой проекта: БД, GUI, команды, конфиги, перезагрузку, локализацию, наблюдаемость и событийную коммуникацию.
 
-Эта документация построена по исходникам `chi2l3s/next-lib` и отражает текущее runtime-поведение API.
+## Для кого эта библиотека
 
-## Модули
+NextLib особенно полезен, если вы:
+
+- развиваете плагин дольше «одного релиза»;
+- хотите единый инженерный стиль вместо ad-hoc кода;
+- хотите быстрее внедрять фичи без постоянного переписывания инфраструктуры;
+- хотите, чтобы код оставался читаемым через месяцы развития.
+
+## Ключевая идея NextLib
+
+Не тратить время на повторяемый каркас.
+
+Вместо этого:
+
+- инфраструктура типизирована и централизована;
+- бизнес-логика остаётся в вашем домене;
+- техдолг снижается за счёт единых контрактов.
+
+## Что входит в библиотеку
+
+### Базовые модули
 
 - Dynamic Database
 - GUI API
@@ -19,14 +38,74 @@ NextLib — модульная библиотека для Paper/Spigot плаг
 - Color API
 - Config Manager
 
-## Начать с этого
+### Операционные и платформенные модули
+
+- NextLib Context
+- Validation API
+- Reload API
+- Observability API
+- I18n API
+- Messaging API
+- Quests API
+- Utilities API
+
+## Что нового в линии 1.0.8
+
+- `NextLibContext` как единая runtime-точка сервисов.
+- Усиленный Dynamic Database: relations, include-graphs, upsert, auto migrations, аннотации validation/index/unique/convert.
+- Полноценные эксплуатационные инструменты: health checks, metrics, structured logs.
+- Расширение доменных модулей: quests + validation + reload orchestration.
+
+## Архитектурная карта (в одном абзаце)
+
+`NextLibContext` поднимает сервисы платформы. `DatabaseManager` + `DynamicDatabase` работают с данными. `GuiManager` обслуживает меню. `Command API` управляет входной точкой игрока/админа. `Validation` фильтрует вход. `I18n` и `Color` формируют пользовательский текст. `Reload` позволяет безопасно обновлять состояние. `Observability` показывает, что происходит в проде.
+
+## Как читать эту документацию
+
+### Если начинаете с нуля
 
 1. [Установка](/ru/docs/installation)
 2. [Быстрый старт](/ru/docs/quick-start)
 3. [Dynamic Database](/ru/docs/modules/dynamic-database)
 4. [GUI API](/ru/docs/modules/gui-api)
-5. [Troubleshooting](/ru/docs/troubleshooting)
+
+### Если у вас уже есть плагин
+
+- устойчивость и эксплуатация:
+  - [Reload API](/ru/docs/modules/reload-api)
+  - [Observability API](/ru/docs/modules/observability-api)
+  - [Troubleshooting](/ru/docs/troubleshooting)
+- контент и UX:
+  - [Quests API](/ru/docs/modules/quests-api)
+  - [I18n API](/ru/docs/modules/i18n-api)
+  - [Item API](/ru/docs/modules/item-api)
+- инфраструктурная чистота:
+  - [Validation API](/ru/docs/modules/validation-api)
+  - [Config Manager](/ru/docs/modules/config-manager)
+
+## Рекомендуемый путь внедрения в существующий проект
+
+1. Подключить NextLib и драйвер БД.
+2. Вынести bootstrap в `NextLibContext`.
+3. Перевести хотя бы один доменный блок на `DynamicTable`.
+4. Перенести GUI из хардкода в YAML.
+5. Включить Reload + базовые метрики/health.
+6. После стабилизации расширить на i18n и messaging.
+
+## Философия качества
+
+- Явные контракты вместо «магии».
+- Малые модули с понятной ответственностью.
+- Наблюдаемость и reload как часть дизайна, а не post-fix.
+- Документация и код развиваются вместе.
+
+## Полезные разделы
+
+- [API Reference](/ru/docs/api-reference) — подробный справочник методов и контрактов.
+- [Cookbook](/ru/docs/cookbook) — практические сценарии «как сделать фичу».
+- [Glossary](/ru/docs/glossary) — словарь терминов для команды.
+- [Roadmap](/ru/docs/roadmap) — куда движется проект.
 
 <Warning>
-В старых примерах из README могут встречаться названия методов/ключей, которых уже нет в runtime (например, camelCase-ключи GUI). Используйте примеры из текущей документации.
+Документация синхронизирована с исходниками `C:\Users\vllad\IdeaProjects\NextLib` (версия 1.0.8). Если вы используете более старый артефакт, часть API может отличаться.
 </Warning>

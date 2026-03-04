@@ -1,8 +1,8 @@
 "use client";
 
 import { Languages } from "lucide-react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useTransition } from "react";
+import { usePathname, useRouter } from "@/i18n/navigation";
 import type { AppLocale } from "@/i18n/routing";
 
 type Props = {
@@ -11,15 +11,9 @@ type Props = {
 
 export function LanguageSwitcher({ locale }: Props) {
   const pathname = usePathname() || "/";
-  const searchParams = useSearchParams();
   const router = useRouter();
-  const [pending, setPending] = useState(false);
+  const [pending, startTransition] = useTransition();
   const nextLocale = locale === "ru" ? "en" : "ru";
-  const targetHref = useMemo(() => {
-    const normalized = pathname.replace(/^\/(ru|en)(?=\/|$)/, "") || "/";
-    const query = searchParams.toString();
-    return `/${nextLocale}${normalized}${query ? `?${query}` : ""}`;
-  }, [nextLocale, pathname, searchParams]);
 
   return (
     <button
@@ -27,8 +21,9 @@ export function LanguageSwitcher({ locale }: Props) {
       disabled={pending}
       onClick={() => {
         if (pending) return;
-        setPending(true);
-        router.replace(targetHref);
+        startTransition(() => {
+          router.replace(pathname, { locale: nextLocale });
+        });
       }}
       className="inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-bold transition hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-60"
       aria-label="Switch language"

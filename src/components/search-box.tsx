@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Search, X } from "lucide-react";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter } from "@/i18n/navigation";
 import AnimatedList from "@/components/AnimatedList";
 
 type SearchDoc = {
@@ -15,26 +15,10 @@ type SearchDoc = {
 
 export function SearchBox({ docs, placeholder }: { docs: SearchDoc[]; placeholder: string }) {
   const router = useRouter();
-  const pathname = usePathname() || "/";
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [selectedIndex, setSelectedIndex] = useState(0);
   const normalized = query.trim().toLowerCase();
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const isPalette = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
-      if (isPalette) {
-        event.preventDefault();
-        setOpen(true);
-        return;
-      }
-      if (open && event.key === "Escape") {
-        setOpen(false);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
 
   const results = useMemo(() => {
     if (!normalized) return [];
@@ -49,6 +33,43 @@ export function SearchBox({ docs, placeholder }: { docs: SearchDoc[]; placeholde
       .slice(0, 8)
       .map((item) => item.doc);
   }, [docs, normalized]);
+  const clampedSelectedIndex =
+    results.length === 0 ? 0 : Math.min(selectedIndex, results.length - 1);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const isPalette = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
+      if (isPalette || (!open && event.key === "/")) {
+        event.preventDefault();
+        setOpen(true);
+        return;
+      }
+      if (open && event.key === "Escape") {
+        setOpen(false);
+        return;
+      }
+      if (open && event.key === "ArrowDown") {
+        event.preventDefault();
+        setSelectedIndex((prev) => Math.min(prev + 1, Math.max(results.length - 1, 0)));
+        return;
+      }
+      if (open && event.key === "ArrowUp") {
+        event.preventDefault();
+        setSelectedIndex((prev) => Math.max(0, prev - 1));
+        return;
+      }
+      if (open && event.key === "Enter") {
+        if (!normalized) return;
+        const item = results[clampedSelectedIndex];
+        if (!item) return;
+        event.preventDefault();
+        setOpen(false);
+        router.push(item.href);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [clampedSelectedIndex, normalized, open, results, router]);
 
   return (
     <>
@@ -59,6 +80,7 @@ export function SearchBox({ docs, placeholder }: { docs: SearchDoc[]; placeholde
       >
         <Search size={16} />
         <span className="hidden sm:inline">{placeholder}</span>
+        <kbd className="hidden rounded border px-1.5 py-0.5 text-[10px] sm:inline">⌘/Ctrl+K</kbd>
       </button>
 
       <AnimatePresence>
@@ -67,7 +89,7 @@ export function SearchBox({ docs, placeholder }: { docs: SearchDoc[]; placeholde
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[1200] bg-black/45 backdrop-blur-md"
+            className="fixed inset-0 z-[1200] bg-black/45"
             onClick={() => setOpen(false)}
           >
             <motion.div
@@ -83,7 +105,10 @@ export function SearchBox({ docs, placeholder }: { docs: SearchDoc[]; placeholde
                 <input
                   autoFocus
                   value={query}
-                  onChange={(event) => setQuery(event.target.value)}
+                  onChange={(event) => {
+                    setQuery(event.target.value);
+                    setSelectedIndex(0);
+                  }}
                   placeholder={placeholder}
                   className="h-12 w-full rounded-xl border bg-transparent px-4 text-base font-semibold outline-none"
                 />
@@ -101,15 +126,16 @@ export function SearchBox({ docs, placeholder }: { docs: SearchDoc[]; placeholde
                   <AnimatedList
                     className="!w-full max-w-none"
                     itemClassName="!rounded-xl !bg-transparent border font-bold"
+                    selectedItemClassName="!bg-black !text-white dark:!bg-white dark:!text-black"
                     displayScrollbar={true}
                     items={results.map((result) => `${result.title} - ${result.description}`)}
                     onItemSelect={(_, index) => {
                       const item = results[index];
                       if (!item) return;
                       setOpen(false);
-                      const localePrefix = /^\/(ru|en)(?=\/|$)/.exec(pathname)?.[0] ?? "/ru";
-                      router.push(`${localePrefix}${item.href}`);
+                      router.push(item.href);
                     }}
+                    initialSelectedIndex={clampedSelectedIndex}
                   />
                 ) : (
                   <div className="rounded-xl border p-4 text-sm font-semibold opacity-70">

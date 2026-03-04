@@ -1,57 +1,61 @@
 ---
 title: Config Manager
-description: "Подробный разбор BaseConfig: конструкторы, reloadConfig, loadValues и типовые ошибки."
+description: "Полное руководство по Config Manager: BaseConfig lifecycle, типобезопасный доступ, reload-пайплайн, эволюция YAML и эксплуатация в проде."
 order: 15
 ---
 
 # Config Manager
 
-`BaseConfig` нужен, чтобы унифицировать работу с YAML-конфигами:
+Config Manager в NextLib нужен, чтобы работа с YAML была управляемой и предсказуемой в долгоживущем плагине.
 
-- гарантированно создать файл, если его нет;
-- загрузить `YamlConfiguration`;
-- обновить структуру конфига через `ConfigUpdater`;
-- централизованно перечитать значения в поля класса.
+## 1. Зачем нужен этот модуль
 
-## Конструкторы
+Типичный хаос без Config Manager:
+
+- `config.getString(...)` разбросан по всему проекту,
+- после reload часть сервисов видит старые значения,
+- ошибки в ключах обнаруживаются случайно,
+- обновление структуры конфига болезненно.
+
+`BaseConfig` решает это контрактом жизненного цикла.
+
+## 2. `BaseConfig`: контракт
+
+Конструкторы:
 
 ```java
 BaseConfig(JavaPlugin plugin, String fileName, boolean update)
 BaseConfig(JavaPlugin plugin, String fileName)
 ```
 
-Параметры:
+Поля/доступ:
 
-| Аргумент | Что означает |
-| --- | --- |
-| `plugin` | Экземпляр вашего JavaPlugin |
-| `fileName` | Имя yaml-файла в папке плагина |
-| `update` | Нужно ли выполнять обновление структуры через `ConfigUpdater` |
+- `protected FileConfiguration config` — актуальная YAML-конфигурация.
 
-Если используется конструктор без `update`, применяется `update=true`.
+Абстрактный метод:
 
-## Как работает `reloadConfig()`
+- `protected abstract void loadValues()` — место, где вы парсите config в типизированные поля.
 
-1. Если файл отсутствует, копируется ресурс из jar.
-2. Загружается `YamlConfiguration` в поле `config`.
-3. При `update=true` вызывается `ConfigUpdater.update(...)`.
-4. Вызывается ваш `loadValues()`.
+## 3. Жизненный цикл `reloadConfig()`
 
-Итог: после `reloadConfig()` поля вашего класса должны содержать актуальные значения из файла.
+`reloadConfig()` делает:
 
-## Обязательная часть наследника
+1. Проверяет наличие файла в data-folder.
+2. Если нет — копирует ресурс через `saveResource`.
+3. Загружает YAML в `config`.
+4. Если `update=true` — запускает updater.
+5. Вызывает `loadValues()`.
 
-```java
-protected abstract void loadValues();
-```
+Смысл: в остальном коде вы используете уже типизированные поля класса, а не «сырой» YAML.
 
-В `loadValues()` переносите значения из `config` в типизированные поля класса.
-
-## Пример
+## 4. Полный пример наследника
 
 ```java
 public final class MainConfig extends BaseConfig {
     private int maxPlayers;
+    private boolean pvpEnabled;
+    private String motd;
+    private List<String> allowedWorlds;
 
     public MainConfig(JavaPlugin plugin) {
         super(plugin, "config.yml", true);
@@ -61,22 +65,153 @@ public final class MainConfig extends BaseConfig {
     @Override
     protected void loadValues() {
         maxPlayers = config.getInt("limits.maxPlayers", 50);
+        pvpEnabled = config.getBoolean("gameplay.pvp", true);
+        motd = config.getString("messages.motd", "Welcome");
+        allowedWorlds = config.getStringList("worlds.allowed");
     }
 
-    public int getMaxPlayers() {
-        return maxPlayers;
-    }
+    public int getMaxPlayers() { return maxPlayers; }
+    public boolean isPvpEnabled() { return pvpEnabled; }
+    public String getMotd() { return motd; }
+    public List<String> getAllowedWorlds() { return allowedWorlds; }
 }
 ```
 
-## Рекомендации
+## 5. Что должно жить в `loadValues()`, а что нет
 
-- Держите парсинг только в `loadValues()`.
-- В бизнес-коде используйте getters, а не прямой доступ к `config`.
-- После ручного изменения файла на диске вызывайте `reloadConfig()`.
+### Должно
 
-## Частые ошибки
+- чтение ключей,
+- преобразование типов,
+- нормализация значений,
+- базовая валидация,
+- установка default.
 
-1. Чтение значений до первого `reloadConfig()`.
-2. Отсутствие default-файла в ресурсах при ожидании `saveResource`.
-3. Смешивание логики загрузки и бизнес-логики в одном методе.
+### Не должно
+
+- тяжёлая бизнес-логика,
+- сетевые вызовы,
+- SQL-запросы,
+- игровые side effects.
+
+## 6. `ConfigUtil` helpers
+
+### `parseTime(...)`
+
+Позволяет парсить удобные значения:
+
+- `30s`
+- `5m`
+- `1h`
+- `1d`
+
+### `getWorld(...)`
+
+Безопасно получает `World` по имени из конфигурации.
+
+Эти helper-ы убирают дублирование в каждом конфиг-классе.
+
+## 7. Структура конфигов для большого проекта
+
+Рекомендуемый набор:
+
+- `MainConfig` — ядро настроек.
+- `MessagesConfig` — тексты/шаблоны.
+- `GameplayConfig` — механики.
+- `RewardsConfig` — награды.
+- `GuiConfig` — внешние GUI-настройки (если нужны вне YAML меню).
+
+Принцип: один класс-наследник = один YAML-файл.
+
+## 8. Reload интеграция
+
+```java
+context.reload().register(new Reloadable() {
+    @Override
+    public String id() { return "config.main"; }
+
+    @Override
+    public void reload() {
+        mainConfig.reloadConfig();
+        messagesConfig.reloadConfig();
+    }
+});
+```
+
+Это создаёт единый контролируемый пайплайн перезагрузки.
+
+## 9. Эволюция схемы YAML
+
+Проблема: вы добавили новые ключи в `config.yml`, а у старых пользователей файл старой версии.
+
+Подход:
+
+1. Включайте `update=true`.
+2. Держите default-значения в `loadValues`.
+3. Логируйте отсутствие критичных ключей.
+4. Версионируйте конфиги и миграции.
+
+## 10. Валидация конфигов
+
+Рекомендовано:
+
+- численные диапазоны (например `maxPlayers > 0`),
+- допустимые enum-строки,
+- существование миров/файлов,
+- отсутствие пустых обязательных ключей.
+
+Если конфиг некорректный, отдавайте понятный лог с путём ключа.
+
+## 11. Ошибки и диагностика
+
+### Файл не создаётся
+
+- `fileName` не существует в ресурсах jar,
+- проблемы с правами на файловую систему.
+
+### Поля остаются `null`
+
+- забыли вызвать `reloadConfig()` в конструкторе/старте.
+
+### Reload ничего не меняет
+
+- сервис читает `config` напрямую и кеширует старое значение,
+- `loadValues()` не обновляет нужные поля.
+
+## 12. Антипаттерны
+
+- Использовать `config` напрямую в 20 местах проекта.
+- Делать `reloadConfig` из нескольких потоков без контроля.
+- Не задавать default-ы.
+- Смешивать parsing и game-side effects.
+
+## 13. Production-практики
+
+1. Логируйте ключевые параметры на старте (без секретов).
+2. На reload печатайте краткий отчёт, что перечитано.
+3. Все критичные значения дублируйте проверкой валидности.
+4. Для опасных настроек добавьте «safe mode» fallback.
+
+## 14. Большой FAQ
+
+### Где хранить секреты (пароли БД)?
+
+Лучше в env-переменных/внешних секретах, а не в публично распространяемом YAML.
+
+### Можно ли хранить большие списки в YAML?
+
+Можно, но если данные активно меняются и велики, лучше вынести в БД.
+
+### Что делать при несовместимом изменении формата?
+
+Сделать явную миграцию и backward-compatible чтение на переходный период.
+
+## 15. Чеклист конфиг-слоя
+
+- Каждый YAML имеет свой класс-наследник.
+- Все поля читаются в `loadValues`.
+- Есть default-значения.
+- Есть reload-регистрация.
+- Есть логи по ошибкам ключей.
+
+При такой структуре конфиги перестают быть источником случайных багов и становятся стабильным API вашего плагина.

@@ -1,239 +1,530 @@
 ---
 title: Dynamic Database
-description: "Подробно и по-человечески: как устроен модуль, что делает каждый шаг и что означают параметры."
+description: "Полное руководство по Dynamic Database 1.0.8: архитектура, контракты, запросы, relations, include graphs, миграции и production-паттерны."
 order: 10
 ---
 
 # Dynamic Database
 
-Dynamic Database в NextLib — это тонкая ORM-обёртка над JDBC/HikariCP.
+Dynamic Database в NextLib это ORM-подобный слой поверх JDBC/HikariCP, где вы работаете Java-сущностями, а не ручным SQL в каждом классе.
 
-Идея простая:
+Если коротко, поток такой:
 
-1. Вы настраиваете подключение (`DatabaseConfig`, `DatabaseManager`).
-2. Регистрируете Java-класс как таблицу (`DynamicDatabase.register`).
-3. Работаете fluent-запросами (`findFirst`, `findMany`, `update`, `create`).
+1. Собираете `DatabaseConfig`.
+2. Регистрируете клиент в `DatabaseManager`.
+3. Создаёте `DynamicDatabase`.
+4. Регистрируете `DynamicTable<T>` для сущности.
+5. Выполняете CRUD fluent-методами.
+6. При необходимости используете relation include-графы.
+7. Контролируете изменения схемы через auto/ручные миграции.
 
-## Когда использовать
+Ниже весь процесс максимально подробно.
 
-- Нужно быстро хранить данные плагина без ручной сборки SQL в каждом месте.
-- Нужны одинаковые API-операции для MySQL/PostgreSQL/SQLite.
-- Не нужна сложная ORM с lazy loading и полноценными миграциями.
+## 1. Архитектура слоя данных
 
-## Базовые сущности и их роль
+### Уровень 1: `DatabaseConfig`
 
-### `DatabaseConfig`
+Immutable-конфиг подключения.
 
-Отвечает за параметры подключения.
+- тип БД (`MYSQL`, `POSTGRESQL`, `SQLITE`),
+- адрес/база/логин/пароль или путь к файлу,
+- свойства пула (`maximumPoolSize`, `connectionTimeout` и др.).
 
-Ключевые параметры:
+### Уровень 2: `DatabaseManager`
 
-- `type` — тип БД (`MYSQL`, `POSTGRESQL`, `SQLITE`).
-- `host`, `port`, `database`, `username`, `password` — обязательны для MySQL/PostgreSQL.
-- `file` — путь к файлу SQLite.
-- `property(key, value)` — параметры пула HikariCP и datasource.
+Реестр именованных datasource-клиентов.
 
-### `DatabaseManager`
+- `register(name, config)` поднимает datasource,
+- `getDefault()` даёт дефолтный клиент,
+- `close()` закрывает все пулы.
 
-Хранит и обслуживает подключения.
+### Уровень 3: `DatabaseClient`
 
-Что делает:
+Низкоуровневый API выполнения SQL.
 
-- регистрирует клиент по имени (`register("main", config)`),
-- хранит default-клиент,
-- закрывает пулы в `close()`.
+- `query`, `queryOne`, `execute`, `executeBatch`, транзакции.
 
-### `DatabaseClient`
+### Уровень 4: `DynamicDatabase` и `DynamicTable<T>`
 
-Низкоуровневый исполнитель SQL.
+Высокоуровневый слой сущностей.
 
-Основные методы:
+- отражение Java-полей в SQL-колонки,
+- auto create table,
+- fluent where/update/delete,
+- include relations.
 
-- `query(...)` — список результатов,
-- `queryOne(...)` — один результат (`Optional`),
-- `execute(...)` — INSERT/UPDATE/DDL,
-- `executeBatch(...)` — пакетная запись,
-- `withConnection(...)` — ручной контроль транзакций.
+## 2. Подключение: контракт и ошибки
 
-### `DynamicDatabase` / `DynamicTable<T>`
-
-- `DynamicDatabase` — реестр таблиц.
-- `DynamicTable<T>` — CRUD API для конкретной сущности.
-
-## Пошагово: от нуля до рабочих запросов
-
-### 1) Подключение
+### PostgreSQL пример
 
 ```java
 DatabaseManager manager = new DatabaseManager();
 
-DatabaseConfig config = DatabaseConfig.builder(DatabaseType.MYSQL)
+DatabaseConfig config = DatabaseConfig.builder(DatabaseType.POSTGRESQL)
     .host("localhost")
-    .port(3306)
-    .database("nexttraps")
-    .username("root")
-    .password("password")
-    .property("maximumPoolSize", "10")
+    .port(5432)
+    .database("nextlib")
+    .username("app")
+    .password("secret")
+    .property("maximumPoolSize", "12")
     .property("minimumIdle", "2")
     .property("connectionTimeout", "30000")
+    .property("maxLifetime", "1800000")
     .build();
 
 DatabaseClient client = manager.register("main", config);
 ```
 
-Что важно по параметрам пула:
+### SQLite пример
 
-- `maximumPoolSize` — верхняя граница одновременных соединений.
-- `minimumIdle` — сколько idle-соединений держать заранее.
-- `connectionTimeout` — сколько ждать свободное соединение.
+```java
+DatabaseConfig sqlite = DatabaseConfig.builder(DatabaseType.SQLITE)
+    .file(plugin.getDataFolder() + "/database.db")
+    .property("maximumPoolSize", "4")
+    .build();
+```
 
-### 2) Сущность
+### Что обязательно
+
+- Для `MYSQL`/`POSTGRESQL`: `host`, `database`, `username`, `password`.
+- Для `SQLITE`: `file`.
+
+### Типичные исключения на старте
+
+- `ConfigurationException: Missing JDBC driver`:
+  - не подключен драйвер БД в runtime.
+- `ConfigurationException: Failed to configure HikariCP pool`:
+  - некорректные свойства пула,
+  - недоступен хост/порт,
+  - неверные креды.
+
+## 3. Сущности: как правильно проектировать
+
+### Минимальный пример
 
 ```java
 @AllArgsConstructor
 @Getter
 public class PlayerEntity {
     @PrimaryKey
-    private final UUID id;
+    private final UUID playerId;
+
     private final String nickname;
     private final Integer coins;
-    private final Instant lastLogin;
+    private final Long lastLoginAt;
 }
 ```
 
-Требования:
+### Обязательные правила
 
-- должен быть конструктор по всем полям,
-- порядок параметров конструктора = порядок полей,
-- `@PrimaryKey` помечает первичный ключ,
-- если `@PrimaryKey` не указан, ключом станет первое поле.
+1. Должен быть конструктор, покрывающий все поля.
+2. Порядок параметров должен соответствовать маппингу полей.
+3. Для nullable колонок используйте reference-типы (`Integer`, `Long`), не примитивы.
+4. Для primary key лучше использовать стабильный бизнес-id (`UUID`), а не mutable поля.
 
-### 3) Регистрация таблицы
+### Нежелательные практики
+
+- Добавлять в сущность чисто runtime-поля (кэши/сервисы).
+- Использовать нестабильные значения как primary key.
+- Менять тип колонки без миграционного плана.
+
+### Новые аннотации в текущем коде библиотеки
+
+В актуальной реализации Dynamic Database поддерживаются дополнительные аннотации валидации, индексации и конвертации:
+
+- `@NotNull`
+- `@Size(min, max)`
+- `@Min(value)`
+- `@Max(value)`
+- `@Pattern(regex)`
+- `@Email`
+- `@Index(fields = {...})` / `@Indexes`
+- `@Unique(fields = {...})` / `@Uniques`
+- `@Convert(MyConverter.class)`
+
+#### Что это даёт на практике
+
+- Перед `create/update/upsert` значения валидируются на уровне entity metadata.
+- Индексы и уникальные ограничения могут быть описаны декларативно на сущности.
+- Через `@Convert` можно хранить кастомные Java-типы в стандартных SQL типах.
+
+Пример:
 
 ```java
-DynamicDatabase database = new DynamicDatabase(client);
-DynamicTable<PlayerEntity> players = database.register("players", PlayerEntity.class);
+@Index(fields = {"nickname"})
+@Unique(fields = {"email"})
+public class PlayerEntity {
+    @PrimaryKey
+    private final UUID playerId;
+
+    @NotNull
+    @Size(min = 3, max = 16)
+    private final String nickname;
+
+    @Email
+    private final String email;
+
+    @Convert(JsonMapConverter.class)
+    private final Map<String, Integer> stats;
+}
 ```
 
-Если таблицы нет — она создастся автоматически.
-
-## CRUD с пояснением параметров
-
-### `create(entity)`
+Конвертер:
 
 ```java
-players.create(new PlayerEntity(id, "chi2l3s", 1000, Instant.now()));
+public final class JsonMapConverter implements ValueConverter<Map<String, Integer>, String> {
+    @Override
+    public Class<String> databaseType() {
+        return String.class;
+    }
+
+    @Override
+    public String toDatabase(Map<String, Integer> value) {
+        return value == null ? null : serializeToJson(value);
+    }
+
+    @Override
+    public Map<String, Integer> fromDatabase(String value) {
+        return value == null ? Map.of() : parseFromJson(value);
+    }
+}
 ```
 
-- `entity` — объект, поля которого будут записаны в колонки таблицы.
+## 4. Регистрация таблиц и жизненный цикл
 
-### `findFirst().where(field, value).execute()`
+```java
+DynamicDatabase db = new DynamicDatabase(client)
+    .withAutoMigrations(plugin);
+
+DynamicTable<PlayerEntity> players = db.register("players", PlayerEntity.class);
+```
+
+Что происходит при `register`:
+
+1. Инспекция metadata класса.
+2. Генерация/проверка SQL схемы.
+3. `CREATE TABLE IF NOT EXISTS`.
+4. Для relations возможно создание join-таблиц.
+5. При включенной автоматике проверка недостающих колонок.
+
+## 5. CRUD максимально детально
+
+### Create
+
+```java
+players.create(new PlayerEntity(
+    player.getUniqueId(),
+    player.getName(),
+    100,
+    System.currentTimeMillis()
+));
+```
+
+Гарантии:
+
+- значения биндим через prepared statements,
+- SQL injection на уровне value-параметров отсутствует.
+
+Batch-вставка:
+
+```java
+int inserted = players.createMany(batch);
+```
+
+Когда использовать batch:
+
+- массовая миграция,
+- импорт архивных данных,
+- периодические синхронизации.
+
+### Read
+
+#### Получить одну запись
 
 ```java
 Optional<PlayerEntity> one = players.findFirst()
-    .where("id", id)
+    .where("playerId", playerId)
     .execute();
 ```
 
-- `field` — **имя Java-поля** сущности (не SQL alias).
-- `value` — значение фильтра.
-- результат: `Optional<T>`.
-
-### `findMany()`
+#### Получить множество с сортировкой
 
 ```java
-List<PlayerEntity> rich = players.findMany()
-    .where("coins", QueryOperator.GREATER_THAN, 1000)
+List<PlayerEntity> top = players.findMany()
+    .where("coins", QueryOperator.GREATER_THAN, 0)
+    .orderBy("coins", true)
+    .take(50)
+    .skip(0)
     .execute();
 ```
 
-- возвращает список, может быть пустым.
+Важно: `skip(offset)` требует `take(limit)`, иначе будет исключение.
 
-### `update().set(...).where(...).execute()`
+#### Подсчёт
+
+```java
+long count = players.count(Map.of("nickname", "chi2l3s"));
+```
+
+### Update
+
+#### Builder-подход
 
 ```java
 int updated = players.update()
-    .set("coins", 1500)
-    .set("lastLogin", Instant.now())
-    .where("id", id)
+    .set("coins", 150)
+    .set("lastLoginAt", System.currentTimeMillis())
+    .where("playerId", playerId)
     .execute();
 ```
 
-- `set(field, value)` — какое поле обновить и на какое значение.
-- `where(...)` — фильтр строк, которые будут обновлены.
-- результат: количество изменённых строк.
-
-## Операторы и когда их применять
-
-- `EQUALS`, `NOT_EQUALS` — точное сравнение.
-- `GREATER_THAN`, `LESS_THAN`, `..._OR_EQUALS` — числовые диапазоны.
-- `LIKE`, `NOT_LIKE` — поиск по шаблону (`%text%`).
-- `IN`, `NOT_IN` — выборка по множеству значений.
-- `BETWEEN` — диапазон от и до.
-- `IS_NULL`, `IS_NOT_NULL` — проверка null.
-
-Пример комбинирования:
+#### Map-подход
 
 ```java
-players.findMany()
-    .where("coins", QueryOperator.GREATER_THAN, 500)
-    .whereLike("nickname", "Pro%")
-    .whereIsNotNull("lastLogin")
-    .execute();
+int updatedMany = players.updateMany(
+    Map.of("nickname", "Tester"),
+    Map.of("coins", 1000)
+);
 ```
 
-Все условия объединяются через `AND`.
+#### Контракт безопасности
 
-## Транзакции: когда нужны и как делать
+- `update(where, data)` рассчитан на единичную запись.
+- Если затронуто >1 строки, бросается `DatabaseException`.
 
-Используйте транзакции, когда несколько операций должны пройти как единое целое.
+Это полезно, когда вы логически ожидаете уникальное совпадение.
+
+### Delete
 
 ```java
-client.withConnection(connection -> {
-    connection.setAutoCommit(false);
-    try {
-        players.create(first);
-        players.create(second);
-        connection.commit();
-        return true;
-    } catch (Exception e) {
-        connection.rollback();
-        throw e;
-    }
-});
+int deleted = players.delete(Map.of("playerId", playerId));
 ```
 
-## Частые ошибки и как избежать
+Аналогично update:
 
-### `Failed to resolve constructor`
+- единичный delete защищает от случайного удаления множества строк.
 
-Причина: конструктор сущности не совпадает с полями.
+Массовое удаление:
 
-Проверьте:
+```java
+int purged = players.deleteMany(Map.of("nickname", "obsolete"));
+```
 
-- полный набор параметров,
-- порядок,
-- типы.
+### Upsert
 
-### `Unknown field '...'`
+```java
+PlayerEntity result = players.upsert(
+    Map.of("playerId", playerId),
+    new PlayerEntity(playerId, "new", 0, System.currentTimeMillis()),
+    Map.of("lastLoginAt", System.currentTimeMillis())
+);
+```
 
-Причина: опечатка в `where("...")` или `set("...")`.
+Когда это удобно:
 
-Используйте имена полей из Java-класса 1 в 1.
+- lazy-инициализация записи игрока,
+- идемпотентный апдейт состояния.
 
-### Медленные запросы
+## 6. Where API: все основные варианты
 
-Что делать:
+### Равенство и сравнения
 
-- добавить индексы вручную,
-- оптимизировать `where` по индексируемым полям,
-- использовать batch для массовых вставок.
+```java
+.where("coins", 100)
+.where("coins", QueryOperator.GREATER_THAN, 100)
+.where("coins", QueryOperator.LESS_THAN_OR_EQUALS, 5000)
+```
 
-## Ограничения модуля
+### Комбинации условий
 
-- Нет автоматических миграций схемы уровня полноценной ORM.
-- Для сложных cross-table сценариев лучше писать явный SQL через `DatabaseClient`.
+```java
+.where("coins", QueryOperator.GREATER_THAN, 100)
+.orWhere("nickname", "Admin")
+.whereNot("nickname", "BannedName")
+```
 
-<Note>
-Лучший рабочий паттерн: `DynamicTable` для повседневного CRUD + `DatabaseClient` для транзакций, индексов и сложных SQL.
-</Note>
+### Строковые фильтры
+
+```java
+.whereLike("nickname", "Pro%")
+.whereStartsWith("nickname", "Mr")
+.whereEndsWith("nickname", "_YT")
+.whereContains("nickname", "fox")
+```
+
+### Множества и диапазоны
+
+```java
+.whereIn("nickname", "a", "b", "c")
+.whereBetween("coins", 100, 1000)
+```
+
+### Null-проверки
+
+```java
+.whereIsNull("lastLoginAt")
+.whereIsNotNull("lastLoginAt")
+```
+
+Контракт:
+
+- `IN` требует минимум 1 значение.
+- `BETWEEN` требует ровно 2 значения.
+- Для операторов, не совместимых с `null`, будет исключение.
+
+## 7. Relations и include-графы
+
+DynamicTable умеет загружать связи через `include(...)` и возвращать `EntityGraph<T>`.
+
+```java
+Optional<EntityGraph<PlayerEntity>> graph = players.findFirst()
+    .where("playerId", playerId)
+    .include("profile", "guild", "achievements")
+    .executeGraph();
+```
+
+Что внутри `EntityGraph`:
+
+- корневой объект,
+- map relationName -> загруженная relation (object/list).
+
+### Важный компромисс
+
+`include` удобен, но может создавать много дополнительных запросов.
+
+Практика:
+
+1. Для списков используйте небольшой `take(limit)`.
+2. Включайте только нужные связи.
+3. Для отчётов/аналитики используйте прямой SQL через `DatabaseClient`.
+
+## 8. Авто-миграции и ручные миграции
+
+### Auto migrations
+
+`withAutoMigrations(plugin)` включает менеджер автогенерации SQL по изменениям metadata.
+
+Чаще всего это:
+
+- добавление новых колонок,
+- создание недостающих таблиц.
+
+### Ручные миграции
+
+```java
+database.migrations().migrate(List.of(
+    new SqlMigration(
+        "202603040001__add_rank",
+        "Add rank column to players",
+        List.of("ALTER TABLE players ADD COLUMN rank TEXT")
+    )
+));
+```
+
+Когда ручная миграция обязательна:
+
+- перенос данных между колонками,
+- изменение типа с преобразованием,
+- сложные индексы/constraints.
+
+## 9. Транзакции и консистентность
+
+Если у вас несколько запросов, которые должны примениться вместе, используйте транзакцию на уровне `DatabaseClient`.
+
+Пример сценария:
+
+- списать баланс,
+- создать запись покупки,
+- обновить статистику.
+
+Если второй шаг упал, первый должен откатиться.
+
+Рекомендация:
+
+- транзакции держите короткими,
+- не включайте в них network I/O,
+- логируйте причины rollback.
+
+## 10. Производительность и индексы
+
+### Симптомы проблем
+
+- рост latency у `findMany`,
+- высокая нагрузка CPU у СУБД,
+- блокировки при массовых update/delete.
+
+### Что делать
+
+1. Добавьте индексы на часто фильтруемые поля.
+2. Всегда ограничивайте большие выдачи `take(limit)`.
+3. Для тяжёлых выборок делайте пагинацию.
+4. Счётчики и агрегаты выполняйте прямым SQL.
+
+## 11. Сопоставление типов Java -> SQL
+
+| Java тип | SQL (обобщённо) | Комментарий |
+| --- | --- | --- |
+| `UUID` | `TEXT` / `UUID` | зависит от диалекта |
+| `String` | `TEXT` | универсально |
+| `Integer` | `INT` / `INTEGER` | nullable через wrapper |
+| `Long` | `BIGINT` / `INTEGER` | timestamps, counters |
+| `Double` | `DOUBLE` / `REAL` | избегайте для валюты |
+| `Boolean` | `BOOLEAN` / `INTEGER` | SQLite часто хранит как int |
+| `byte[]` | `BLOB` / `BYTEA` | бинарные данные |
+
+## 12. Практические паттерны
+
+### Паттерн A: Player profile repository
+
+- один `DynamicTable<PlayerEntity>` на профиль,
+- все DB-вызовы инкапсулированы в `PlayerRepository`,
+- сервисы работают только через репозиторий.
+
+### Паттерн B: Idempotent player bootstrap
+
+- при входе игрока вызывается `upsert`,
+- повторный вызов не ломает данные,
+- startup проще и безопаснее.
+
+### Паттерн C: CQRS-lite
+
+- write: `DynamicTable` операции,
+- read-heavy отчёты: `DatabaseClient` и raw SQL.
+
+## 13. Антипаттерны
+
+- Выполнять DB-запросы в каждом клике GUI без необходимости.
+- Хранить деньги в `double`.
+- Делать `findMany` без `take` на больших таблицах.
+- Полагаться на уникальность поля без DB-ограничений.
+- Игнорировать shutdown и не закрывать `DatabaseManager`.
+
+## 14. Большой FAQ
+
+### Почему `findUnique` падает с множественным результатом?
+
+Потому что контракт метода предполагает ровно 0 или 1 строку. Если в БД больше одной, это сигнал проблем с уникальностью данных.
+
+### Можно ли использовать Dynamic Database без auto migrations?
+
+Да. Тогда схема контролируется полностью вручную.
+
+### Что выбрать для маленького плагина: SQLite или PostgreSQL?
+
+- SQLite: быстрее старт, проще деплой на один сервер.
+- PostgreSQL: лучше масштабирование, больше инструментов аналитики и администрирования.
+
+### Где держать SQL-миграции?
+
+Обычно в каталоге плагина рядом с данными/ресурсами; важно версионировать и хранить в VCS.
+
+## 15. Чеклист перед продом
+
+- Подключён JDBC-драйвер вашей БД.
+- `DatabaseManager.close()` вызывается в `onDisable`.
+- Есть индексы на hot-поля.
+- CRUD сценарии покрыты smoke-тестами.
+- Reload не ломает активные операции.
+- Ошибки БД логируются с контекстом запроса.
+
+Этого достаточно, чтобы Dynamic Database работал стабильно даже на крупных серверах.

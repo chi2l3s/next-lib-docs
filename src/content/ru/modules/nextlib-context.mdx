@@ -1,0 +1,193 @@
+---
+title: NextLib Context
+description: "Полное архитектурное руководство по NextLibContext: bootstrap, lifecycle, сервисы, интеграция и границы ответственности."
+order: 24
+---
+
+# NextLib Context
+
+`NextLibContext` — центральный runtime-контейнер NextLib. В практическом смысле это точка, где инфраструктура плагина собирается в единый управляемый объект.
+
+## 1. Почему это важно
+
+Без единого контекста код быстро деградирует:
+
+- сервисы создаются в разных местах;
+- нет единого lifecycle;
+- reload/metrics/i18n живут «каждый сам по себе»;
+- сложнее тестировать и сопровождать.
+
+`NextLibContext` устраняет этот хаос.
+
+## 2. Что делает `bootstrap(plugin)`
+
+При вызове:
+
+```java
+NextLibContext context = NextLibContext.bootstrap(this);
+```
+
+создаются и поднимаются:
+
+- `ReloadManager`
+- `MetricsRegistry`
+- `HealthRegistry`
+- `MessageBus` (`InMemoryMessageBus`)
+- `FileTranslationStore`
+- `I18nService`
+- `StructuredLogger`
+- fallback locale
+- `i18n` директория
+
+Также регистрируются базовые health checks:
+
+- plugin enabled;
+- наличие default locale bundle.
+
+## 3. Доступные сервисы
+
+- `context.reload()`
+- `context.metrics()`
+- `context.health()`
+- `context.bus()`
+- `context.translations()`
+- `context.i18n()`
+- `context.logger()`
+- `context.fallbackLocale()`
+- `context.i18nDirectory()`
+
+## 4. Практический каркас внедрения
+
+```java
+public final class MyPlugin extends JavaPlugin {
+    private NextLibContext context;
+    private DatabaseManager databaseManager;
+
+    @Override
+    public void onEnable() {
+        context = NextLibContext.bootstrap(this);
+
+        context.logger().info("plugin_start", Map.of(
+            "name", getName(),
+            "version", getDescription().getVersion()
+        ));
+
+        bootstrapDatabase();
+        bootstrapReloads();
+        bootstrapHealth();
+    }
+
+    @Override
+    public void onDisable() {
+        if (databaseManager != null) {
+            databaseManager.close();
+        }
+    }
+}
+```
+
+## 5. Lifecycle-подход
+
+### На `onEnable`
+
+1. bootstrap context;
+2. поднять внешние сервисы (БД, gui manager, кэши);
+3. зарегистрировать reloadable/health metrics.
+
+### На `onDisable`
+
+1. закрыть внешние ресурсы;
+2. зафиксировать финальные метрики/логи при необходимости.
+
+## 6. Как распределять ответственность
+
+`NextLibContext` — это инфраструктура, не домен.
+
+Правильное использование:
+
+- сервисы домена получают context (или нужные интерфейсы) через конструктор;
+- бизнес-правила не пишутся внутри bootstrap;
+- bootstrap только собирает граф зависимостей.
+
+## 7. Интеграция с Reload API
+
+```java
+context.reload().register(new Reloadable() {
+    @Override
+    public String id() { return "i18n.translations"; }
+
+    @Override
+    public void reload() {
+        context.translations().reload();
+    }
+});
+```
+
+Эта схема делает перезагрузку системной и прозрачной.
+
+## 8. Интеграция с Observability
+
+```java
+context.metrics().increment("plugin.enable");
+
+context.health().register("database.main", () -> {
+    try {
+        databaseManager.getDefault().withConnection(connection -> null);
+        return HealthStatus.up("db ok");
+    } catch (Exception ex) {
+        return HealthStatus.down(ex.getMessage());
+    }
+});
+```
+
+## 9. Интеграция с Messaging
+
+```java
+context.bus().publish("plugin.started", new PluginStartedEvent(getName()));
+```
+
+Это помогает decouple модули без прямых зависимостей.
+
+## 10. Типичные ошибки
+
+- вызывать `bootstrap` несколько раз;
+- хранить `NextLibContext` в статике без контроля lifecycle;
+- использовать context как «бог-объект» и тащить доменную логику внутрь него.
+
+## 11. Антипаттерны
+
+- сервисы сами создают себе context;
+- context создаётся лениво в командах/листенерах;
+- смешивание конфигурации, домена и инфраструктуры в одном классе.
+
+## 12. Рекомендованный шаблон проекта
+
+- `Bootstrap` / main plugin class — создаёт context и сервисы.
+- `Infrastructure` слой — db/gui/config modules.
+- `Application` слой — use cases.
+- `Domain` слой — модели и правила.
+
+Context живёт на границе bootstrap/infrastructure.
+
+## 13. FAQ
+
+### Можно ли заменить NextLibContext своим DI?
+
+Да. Вы можете использовать собственный контейнер, а `NextLibContext` держать как один из инфраструктурных компонентов.
+
+### Нужен ли context для маленького плагина?
+
+Даже для маленького плагина он полезен: снижает хаос и упрощает рост.
+
+### Нужно ли сериализовать context?
+
+Нет. Это runtime-объект, не persistence-сущность.
+
+## 14. Чеклист корректного использования
+
+- bootstrap только в `onEnable`;
+- один экземпляр context на плагин;
+- ресурсы корректно закрываются на `onDisable`;
+- reload/metrics/health зарегистрированы через context.
+
+С такой дисциплиной `NextLibContext` становится надежным фундаментом архитектуры.

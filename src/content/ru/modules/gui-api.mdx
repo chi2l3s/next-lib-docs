@@ -1,48 +1,65 @@
 ---
 title: GUI API
-description: "Понятное руководство по GUI API: структура, поля YAML, действия, условия и ограничения runtime."
+description: "Полное руководство по GUI API 1.0.8: загрузка меню, YAML-контракт, действия, условия, перезагрузка, масштабирование и UX-паттерны."
 order: 11
 ---
 
 # GUI API
 
-GUI API в NextLib — это YAML-driven меню с обработчиками клика и условиями.
+GUI API NextLib — это YAML-driven система инвентарных интерфейсов. Вы храните меню в файлах, а библиотека превращает их в рабочие GUI с обработкой кликов.
 
-## Что делает модуль
+## 1. Ментальная модель GUI API
 
-- Загружает меню из `.yml` файлов.
-- Преобразует элементы YAML в `GuiItem`.
-- Вешает действия на левый/правый клик.
-- Позволяет подсвечивать предметы через условия (`enchanted_when`).
+Система состоит из трёх слоёв:
 
-## Важные особенности текущей реализации
+1. `GuiManager` — загрузка/реестр/открытие/refresh.
+2. `GuiLoader` — парсинг YAML в `Gui` и `GuiItem`.
+3. `Actions` + `Conditions` — DSL для поведения и динамики.
 
-Это критично, чтобы не тратить время на “почему не работает”:
+Ключевой плюс: контент редактабелен без перекомпиляции плагина.
 
-- ID меню берётся из **имени файла**, а не из поля `id` в YAML.
-- Поддерживаются ключи клика в snake_case: `on_left_click`, `on_right_click`.
-- `visible_when` и `hidden_when` в runtime сейчас не применяются.
-- `enchanted_when` работает.
-- Загрузка идёт по `.yml` в заданной папке (без рекурсии подпапок).
-
-## Быстрый запуск
+## 2. Инициализация и жизненный цикл
 
 ```java
-GuiManager guiManager = new GuiManager(this);
-guiManager.loadFromFolder(new File(getDataFolder(), "menus"));
+GuiManager guiManager = new GuiManager(plugin);
+guiManager.loadFromFolder(new File(plugin.getDataFolder(), "menus"));
 ```
 
-Открытие:
+Что делает `loadFromFolder`:
 
-```java
-guiManager.openGui(player, "main");
-```
+- сохраняет директорию меню,
+- запускает `reloadAll()`.
 
-Где `main` — это `main.yml`.
+Что делает `reloadAll`:
 
-## YAML: что означает каждый параметр
+1. Закрывает открытые GUI игрокам.
+2. Очищает текущий registry.
+3. Сканирует `.yml` файлы.
+4. Создаёт `Gui` через `GuiLoader`.
+5. Регистрирует GUI по id (обычно имя файла без `.yml`).
 
-Базовая структура:
+Практическое следствие: любые изменения YAML можно подхватить без перезапуска сервера.
+
+## 3. Полный YAML-контракт
+
+### Верхний уровень
+
+- `title`: заголовок инвентаря.
+- `size`: размер (обычно 9..54, кратно 9).
+- `items`: словарь элементов.
+
+### Item-уровень
+
+- `material`
+- `amount`
+- `name`
+- `lore`
+- `slot` или `slots`
+- `on_left_click`
+- `on_right_click`
+- `enchanted_when`
+
+Минимальный пример:
 
 ```yaml
 title: "&8Главное меню"
@@ -50,33 +67,15 @@ size: 27
 items:
   shop:
     material: EMERALD
-    amount: 1
     slot: 11
     name: "&aМагазин"
-    lore:
-      - "&7Купить предметы"
     on_left_click:
       - "opengui shop"
 ```
 
-### Параметры меню
+Важно: runtime использует snake_case ключи. CamelCase-варианты не сработают.
 
-- `title` — заголовок инвентаря (поддерживает цвет-коды).
-- `size` — размер инвентаря (обычно 9/18/27/36/45/54).
-- `items` — словарь элементов.
-
-### Параметры элемента
-
-- `material` — материал из Bukkit `Material`.
-- `amount` — количество в стаке.
-- `slot` — одиночный слот.
-- `slots` — массив слотов/диапазонов (`"0-8"`, `"13"`).
-- `name` — display name.
-- `lore` — список строк лора.
-- `on_left_click` / `on_right_click` — список действий.
-- `enchanted_when` — список условий для подсветки.
-
-## Слоты: как правильно задавать
+## 4. Слоты: точка, диапазон, композиция
 
 ### Один слот
 
@@ -84,112 +83,248 @@ items:
 slot: 13
 ```
 
-### Несколько и диапазоны
+### Несколько/диапазоны
 
 ```yaml
 slots:
   - "0-8"
-  - "10"
+  - "9"
+  - "17"
   - "18-26"
 ```
 
-Если слот выходит за границы `size`, элемент игнорируется с warning в лог.
+Поведение парсера:
 
-## Actions: что делает каждый тип
+- некорректные значения -> warning в лог,
+- слот вне размера меню -> warning и пропуск,
+- дубли слотов внутри элемента дедуплицируются.
 
-Встроенные действия:
+## 5. Встроенные actions: полный список
 
-- `close` — закрыть меню.
-- `command <cmd>` — выполнить команду от игрока.
-- `console <cmd>` — выполнить от консоли.
-- `message <text>` — отправить сообщение игроку.
-- `opengui <id>` — открыть другое меню.
-- `update` — обновить текущее меню.
-- `playsound <sound> <volume> <pitch>` — проиграть звук.
+- `close`
+- `command <cmd>`
+- `console <cmd>`
+- `message <text>`
+- `opengui <id>`
+- `update`
+- `playsound <SOUND> [volume] [pitch]`
 
-Пример цепочки:
+### Что делает каждый
+
+#### `close`
+
+Закрывает текущий инвентарь игрока.
+
+#### `command`
+
+Выполняет команду от игрока.
+
+#### `console`
+
+Выполняет команду от консоли.
+
+#### `message`
+
+Шлёт сообщение игроку через formatter библиотеки.
+
+#### `opengui`
+
+Открывает другое меню по id.
+
+#### `update`
+
+Вызывает refresh GUI для игрока.
+
+#### `playsound`
+
+Воспроизводит звук. Если имя звука неверное, будет warning и no-op.
+
+## 6. Примеры composable actions
 
 ```yaml
-on_left_click:
-  - "console give %player% diamond 1"
-  - "message &aГотово"
-  - "playsound ENTITY_PLAYER_LEVELUP 1.0 1.0"
+buy:
+  material: DIAMOND
+  slot: 13
+  name: "&bКупить"
+  lore:
+    - "&7Цена: &e100"
+  on_left_click:
+    - "console eco take %player% 100"
+    - "message &aПокупка успешна"
+    - "playsound ENTITY_PLAYER_LEVELUP 1.0 1.0"
+    - "update"
 ```
 
-### Аргументы действий
+Практика:
 
-- `%player%` заменяется на имя игрока.
-- для `playsound`:
-- `sound` — enum Bukkit `Sound`,
-- `volume` — громкость (float),
-- `pitch` — высота тона (float).
+- сначала побочный эффект (команда экономики),
+- потом feedback (message/sound),
+- затем `update` для визуальной консистентности.
 
-Если звук невалидный, действие молча заменяется на no-op и пишет warning.
+## 7. Условия (`Conditions`)
 
-## Conditions: как устроены
+Из коробки только:
 
-Встроенные:
+- `always`
+- `never`
 
-- `always` — всегда true.
-- `never` — всегда false.
+Всё остальное вы регистрируете сами.
 
-Регистрация своих условий:
+### Регистрация кастомного условия
 
 ```java
-Conditions.registerCondition("has_perm", (manager, args) ->
+Conditions.registerCondition("has_permission", (manager, args) ->
     player -> player.hasPermission(args)
 );
 ```
 
-Использование:
+YAML:
 
 ```yaml
-enchanted_when:
-  - "has_perm myplugin.vip"
+admin:
+  material: COMMAND_BLOCK
+  slot: 10
+  name: "&cАдминка"
+  enchanted_when:
+    - "has_permission myplugin.admin"
 ```
 
-Если хотя бы одно условие true — предмет получает скрытый enchant glow.
-
-## Программное меню
-
-Когда YAML неудобен, можно собрать GUI кодом:
+## 8. Кастомные actions
 
 ```java
-Gui gui = guiManager.createGui("custom", "&8Custom", 27);
-GuiItem item = new GuiItem(new ItemStack(Material.DIAMOND), 13);
-item.addLeftClickAction(player -> player.sendMessage("§aClick"));
+Actions.registerAction("teleport", (manager, args) -> player -> {
+    String[] parts = args.split(",");
+    double x = Double.parseDouble(parts[0]);
+    double y = Double.parseDouble(parts[1]);
+    double z = Double.parseDouble(parts[2]);
+    player.teleport(new Location(player.getWorld(), x, y, z));
+});
+```
+
+YAML:
+
+```yaml
+spawn:
+  material: ENDER_PEARL
+  slot: 15
+  name: "&bНа спавн"
+  on_left_click:
+    - "teleport 0,100,0"
+```
+
+Рекомендация: все кастомные actions/conditions регистрируйте до `loadFromFolder`.
+
+## 9. Programmatic GUI (без YAML)
+
+```java
+Gui gui = guiManager.createGui("debug", "&8Debug", 27);
+GuiItem item = new GuiItem(new ItemStack(Material.PAPER), 13);
+item.addLeftClickAction(player -> player.sendMessage("clicked"));
 gui.addItem(item);
 ```
 
-## Практика организации
+Используйте этот подход для временных/диагностических меню или динамической сборки из БД.
 
-- Держите имена файлов короткими и стабильными (`main.yml`, `shop.yml`).
-- Для больших GUI делайте отдельные файлы на каждый экран.
-- После изменения YAML используйте `guiManager.reloadAll()`.
+## 10. Интеграция с Reload API
 
-## Частые проблемы
+```java
+context.reload().register(new Reloadable() {
+    @Override
+    public String id() { return "gui.menus"; }
 
-### “GUI не найден”
+    @Override
+    public void reload() {
+        guiManager.reloadAll();
+    }
+});
+```
 
-Чаще всего неверный ID в `openGui(player, id)`.
+Так `/reload` команды перестают быть опасными и становятся управляемыми.
 
-Проверьте имя файла: `shop.yml` -> `shop`.
+## 11. Большие паттерны проектирования GUI
 
-### “Клики не работают”
+### Паттерн A: Main hub
 
-Проверьте ключи:
+- `main.yml` только навигация.
+- Бизнес-логика в дочерних меню.
 
-- должно быть `on_left_click`,
-- а не `onLeftClick`.
+### Паттерн B: Domain folders
 
-### “Условие не срабатывает”
+- `menus/shop/*.yml`
+- `menus/quests/*.yml`
+- `menus/admin/*.yml`
 
-Проверьте:
+### Паттерн C: Action naming policy
 
-- условие зарегистрировано,
-- имя совпадает (case-sensitive),
-- аргументы корректно парсятся в обработчике.
+Если у вас много кастомных actions, используйте namespace:
 
-<Warning>
-Поля `visible_when` и `hidden_when` в текущем runtime-коде не участвуют в отрисовке. Если они есть в старых гайдах, это рассинхрон документации и реализации.
-</Warning>
+- `shop_buy`
+- `quest_accept`
+- `admin_reset`
+
+## 12. Производительность
+
+Симптомы:
+
+- лаги при массовом открытии меню,
+- задержка кликов,
+- частые refresh на каждом тике.
+
+Решения:
+
+1. Не делайте дорогие DB-вызовы прямо в click actions без кеша.
+2. Не спамьте `update` без необходимости.
+3. Крупные вычисления предварительно кэшируйте.
+
+## 13. Частые ошибки и диагностика
+
+### `GUI '<id>' not found!`
+
+- меню не загружено,
+- id не совпадает с файлом,
+- вызов открытия раньше загрузки.
+
+### `Unknown GUI action ...`
+
+- опечатка,
+- забыли `Actions.registerAction`.
+
+### `Unknown GUI condition ...`
+
+- забыли `Conditions.registerCondition`.
+
+### Кнопка «есть», но клик пустой
+
+- неверный ключ действия,
+- слот вышел за границы и item не создался,
+- действие содержит неверные аргументы.
+
+## 14. UX-рекомендации
+
+- Давайте явные названия кнопок («Купить», «Назад», «Подтвердить»).
+- Добавляйте контекст в lore (цена, лимиты, награда).
+- После важных действий давайте моментальный feedback (message + playsound).
+- На рискованных действиях делайте confirm-экран.
+
+## 15. Антипаттерны
+
+- Один огромный YAML на всё.
+- Дублирование одинаковых блоков без структуры.
+- Скрытая бизнес-логика в лоре.
+- Непредсказуемый set команд без логирования.
+
+## 16. Большой FAQ
+
+### Можно ли делать пагинацию?
+
+Да. Обычно через несколько меню (`shop_page_1`, `shop_page_2`) или динамическую сборку programmatic GUI.
+
+### Можно ли работать без PlaceholderAPI?
+
+Базово да, но встроенные action-команды могут использовать PlaceholderAPI для подстановок.
+
+### Можно ли condition на основе базы данных?
+
+Да, но лучше читать из кеша/предзагруженной модели, а не делать SQL в каждый рендер/клик.
+
+Если следовать этим правилам, GUI API остаётся стабильным даже на большом количестве меню и игроков.

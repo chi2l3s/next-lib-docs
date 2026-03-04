@@ -1,0 +1,171 @@
+---
+title: Глоссарий
+description: "Термины и понятия NextLib простым языком: от ORM и include graph до reload pipeline."
+order: 23
+---
+
+# Глоссарий
+
+Этот раздел нужен, чтобы быстро синхронизироваться по терминам, если вы подключаетесь к проекту не с нуля.
+
+## A
+
+### Auto Migration
+
+Автоматическая генерация/применение изменений схемы БД, когда структура Java-сущностей изменилась.
+
+## B
+
+### Builder Pattern
+
+Подход «пошагового» создания объекта. В NextLib активно используется в `ItemBuilder` и `DatabaseConfig.Builder`.
+
+## C
+
+### Connection Pool
+
+Пул соединений к БД (HikariCP), который переиспользует уже открытые соединения вместо создания нового на каждый запрос.
+
+## D
+
+### Dynamic Database
+
+ORM-like слой NextLib: регистрируете сущность и работаете fluent API без ручного SQL в каждом месте.
+
+### DatabaseClient
+
+Низкоуровневый клиент для выполнения SQL с безопасными prepared statements.
+
+## E
+
+### Entity
+
+Java-класс, представляющий строку таблицы БД.
+
+### EntityGraph
+
+Результат запроса с include-связями: корневая сущность + загруженные relation-объекты.
+
+## F
+
+### Fluent API
+
+Цепочка вызовов методов, читающаяся почти как естественный язык: `findMany().where(...).take(...).execute()`.
+
+## G
+
+### GUI YAML Contract
+
+Согласованный формат YAML-файлов для меню: title/size/items/actions/conditions.
+
+## H
+
+### Health Check
+
+Проверка «система жива?». Например: есть ли подключение к БД, существует ли обязательный файл локализации.
+
+## I
+
+### Include
+
+Механизм догрузки связанных сущностей в Dynamic Database (`include("profile")`).
+
+### I18n
+
+Internationalization: хранение текстов по ключам и локалям.
+
+## J
+
+### JitPack
+
+Сервис публикации Java-библиотек из GitHub. Через него NextLib подключается в Gradle/Maven.
+
+## M
+
+### MessageBus
+
+Шина сообщений для слабосвязной коммуникации между модулями.
+
+### Metrics
+
+Численные показатели работы плагина: счётчики, таймеры, gauges.
+
+## O
+
+### Observability
+
+Наблюдаемость: метрики + health checks + структурированные логи.
+
+## P
+
+### Prepared Statement
+
+Параметризованный SQL-запрос, защищающий от SQL Injection и упрощающий binding типов.
+
+### Primary Key
+
+Уникальный идентификатор строки таблицы. В NextLib отмечается `@PrimaryKey`.
+
+## Q
+
+### Query Operator
+
+Оператор условия в where-части (`=`, `>`, `LIKE`, `IN`, `BETWEEN` и т.д.).
+
+## R
+
+### Reload Pipeline
+
+Последовательность reload-блоков (конфиги, GUI, i18n, кэш), выполняемых через `ReloadManager`.
+
+### Repository Layer
+
+Слой между бизнес-логикой и БД, где собираются запросы к `DynamicTable`.
+
+## S
+
+### Structured Logging
+
+Логирование в структурированном виде (ключ-значение), удобное для машинного анализа и фильтрации.
+
+### Side Effects
+
+Побочные эффекты операции (например, изменение БД + отправка сообщения игроку + публикация события).
+
+## T
+
+### Transaction
+
+Группа операций БД, которые должны примениться как единое целое. При ошибке откатываются.
+
+### Troubleshooting
+
+Практика систематического поиска и устранения проблем по симптомам и логам.
+
+## U
+
+### Upsert
+
+Операция «создать если нет, иначе обновить».
+
+## V
+
+### Validation
+
+Проверка входных данных на корректность до выполнения бизнес-логики.
+
+## W
+
+### Where Clause
+
+Условия выборки/обновления/удаления в запросах БД.
+
+## Быстрый мостик между терминами и кодом
+
+- Dynamic Database + Query Operators: [Dynamic Database](/ru/docs/modules/dynamic-database)
+- GUI YAML Contract: [GUI API](/ru/docs/modules/gui-api)
+- Reload Pipeline: [Reload API](/ru/docs/modules/reload-api)
+- Observability/Health/Metrics: [Observability API](/ru/docs/modules/observability-api)
+- Validation: [Validation API](/ru/docs/modules/validation-api)
+
+Глоссарий можно расширять вместе с новыми модулями: это снижает «порог входа» в проект для всей команды.

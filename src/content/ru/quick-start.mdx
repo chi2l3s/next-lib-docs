@@ -1,46 +1,155 @@
 ---
 title: Быстрый старт
-description: Минимальный рабочий путь от пустого плагина до GUI и записи в базу.
+description: "Очень подробный стартовый путь NextLib 1.0.8: от пустого плагина до рабочего ядра с БД, GUI, reload, i18n, метриками и квестами."
 order: 3
 ---
 
 # Быстрый старт
 
-Ниже сценарий, который даст рабочий результат за 10-15 минут:
+Этот раздел сделан как «практический первый день»: вы можете пройти его шаг за шагом и получить рабочий каркас плагина на NextLib с понятной архитектурой.
 
-1. Инициализация базы и GUI в `onEnable`.
-2. Создание первой сущности.
-3. Создание YAML-меню и открытие игроку.
-4. Первая запись и обновление в БД.
+## Что мы соберём в конце
 
-## 1. Инициализация в плагине
+После прохождения у вас будет:
+
+- единый `NextLibContext` (reload + i18n + metrics + health + message bus);
+- подключенная БД (`DatabaseManager`, `DynamicDatabase`, `DynamicTable`);
+- первое GUI меню из YAML;
+- первая команда (`/myplugin reload`);
+- базовый troubleshooting и эксплуатационный чеклист.
+
+## Пререквизиты
+
+Нужно заранее:
+
+1. Paper/Spigot сервер совместимой версии.
+2. Java и Gradle/Maven в рабочем состоянии.
+3. Понимание базового `JavaPlugin` lifecycle (`onEnable/onDisable`).
+
+## Шаг 1. Подключите NextLib и драйвер БД
+
+### Gradle (Kotlin DSL)
+
+```kotlin
+repositories {
+    maven("https://jitpack.io")
+}
+
+dependencies {
+    implementation("com.github.chi2l3s:next-lib:1.0.8")
+    implementation("org.xerial:sqlite-jdbc:3.46.0.0")
+    // либо MySQL/PostgreSQL драйвер
+}
+```
+
+### Maven
+
+```xml
+<repositories>
+  <repository>
+    <id>jitpack.io</id>
+    <url>https://jitpack.io</url>
+  </repository>
+</repositories>
+
+<dependencies>
+  <dependency>
+    <groupId>com.github.chi2l3s</groupId>
+    <artifactId>next-lib</artifactId>
+    <version>1.0.8</version>
+  </dependency>
+  <dependency>
+    <groupId>org.xerial</groupId>
+    <artifactId>sqlite-jdbc</artifactId>
+    <version>3.46.0.0</version>
+  </dependency>
+</dependencies>
+```
+
+Важно: если JDBC-драйвер не попадёт в runtime, БД не инициализируется.
+
+## Шаг 2. Создайте базовый класс плагина
 
 ```java
 public final class MyPlugin extends JavaPlugin {
+    private NextLibContext context;
+
     private DatabaseManager databaseManager;
     private DynamicDatabase dynamicDatabase;
     private DynamicTable<PlayerEntity> players;
+
     private GuiManager guiManager;
 
     @Override
     public void onEnable() {
+        bootstrapContext();
+        bootstrapDatabase();
+        bootstrapGui();
+        bootstrapReloads();
+        bootstrapHealthAndMetrics();
+    }
+
+    @Override
+    public void onDisable() {
+        shutdownDatabase();
+    }
+
+    private void bootstrapContext() {
+        context = NextLibContext.bootstrap(this);
+    }
+
+    private void bootstrapDatabase() {
         databaseManager = new DatabaseManager();
 
         DatabaseConfig config = DatabaseConfig.builder(DatabaseType.SQLITE)
             .file(getDataFolder() + "/database.db")
             .property("maximumPoolSize", "5")
+            .property("connectionTimeout", "30000")
             .build();
 
         DatabaseClient client = databaseManager.register("main", config);
-        dynamicDatabase = new DynamicDatabase(client);
-        players = dynamicDatabase.register("players", PlayerEntity.class);
 
+        dynamicDatabase = new DynamicDatabase(client)
+            .withAutoMigrations(this);
+
+        players = dynamicDatabase.register("players", PlayerEntity.class);
+    }
+
+    private void bootstrapGui() {
         guiManager = new GuiManager(this);
         guiManager.loadFromFolder(new File(getDataFolder(), "menus"));
     }
 
-    @Override
-    public void onDisable() {
+    private void bootstrapReloads() {
+        context.reload().register(new Reloadable() {
+            @Override
+            public String id() {
+                return "gui.menus";
+            }
+
+            @Override
+            public void reload() {
+                guiManager.reloadAll();
+            }
+        });
+    }
+
+    private void bootstrapHealthAndMetrics() {
+        context.health().register("myplugin.db", () -> {
+            try {
+                databaseManager.getDefault().withConnection(connection -> null);
+                return HealthStatus.up("database reachable");
+            } catch (Exception ex) {
+                return HealthStatus.down(ex.getMessage());
+            }
+        });
+
+        context.metrics().registerGauge("myplugin.online_players", () ->
+            (double) getServer().getOnlinePlayers().size()
+        );
+    }
+
+    private void shutdownDatabase() {
         if (databaseManager != null) {
             databaseManager.close();
         }
@@ -48,34 +157,69 @@ public final class MyPlugin extends JavaPlugin {
 }
 ```
 
-Что важно в этом шаге:
-
-- `register("main", config)` открывает именованное подключение.
-- `dynamicDatabase.register("players", PlayerEntity.class)` связывает Java-класс с таблицей.
-- `loadFromFolder(...)` загружает YAML-меню из папки.
-
-## 2. Опишите сущность
+## Шаг 3. Опишите первую сущность
 
 ```java
 @AllArgsConstructor
 @Getter
 public class PlayerEntity {
     @PrimaryKey
-    private final UUID id;
+    private final UUID playerId;
+
     private final String nickname;
     private final Integer coins;
+    private final Long lastSeenAt;
 }
 ```
 
-Роль полей:
+Пояснения:
 
-- `id`: первичный ключ записи.
-- `nickname`: ник, который хранится в таблице.
-- `coins`: баланс для примера CRUD-операций.
+- `@PrimaryKey` обозначает уникальный ключ записи.
+- `Integer/Long` (а не `int/long`) удобны для nullable сценариев.
+- Конструктор должен корректно покрывать поля сущности.
 
-## 3. Создайте первое GUI меню
+## Шаг 4. Добавьте базовые операции с БД
 
-`plugins/<plugin>/menus/main.yml`:
+Например, при первом входе игрока:
+
+```java
+public void ensureProfile(Player player) {
+    UUID id = player.getUniqueId();
+
+    players.upsert(
+        Map.of("playerId", id),
+        new PlayerEntity(id, player.getName(), 100, System.currentTimeMillis()),
+        Map.of("nickname", player.getName(), "lastSeenAt", System.currentTimeMillis())
+    );
+}
+```
+
+Изменение баланса:
+
+```java
+public boolean spendCoins(UUID playerId, int amount) {
+    Optional<PlayerEntity> profileOpt = players.findFirst()
+        .where("playerId", playerId)
+        .execute();
+
+    if (profileOpt.isEmpty()) return false;
+
+    PlayerEntity profile = profileOpt.get();
+    int current = profile.getCoins() == null ? 0 : profile.getCoins();
+    if (current < amount) return false;
+
+    players.update()
+        .set("coins", current - amount)
+        .where("playerId", playerId)
+        .execute();
+
+    return true;
+}
+```
+
+## Шаг 5. Создайте первое меню
+
+Файл: `plugins/MyPlugin/menus/main.yml`
 
 ```yaml
 title: "&8Main"
@@ -83,40 +227,113 @@ size: 27
 items:
   reward:
     material: DIAMOND
-    slot: 13
+    slot: 11
     name: "&bПолучить награду"
+    lore:
+      - "&7Нажмите, чтобы выдать награду"
     on_left_click:
       - "message &aНаграда выдана"
       - "playsound ENTITY_PLAYER_LEVELUP 1.0 1.0"
+
+  shop:
+    material: EMERALD
+    slot: 15
+    name: "&aОткрыть магазин"
+    on_left_click:
+      - "opengui shop"
 ```
 
-Открытие:
+Критично: используйте snake_case ключи (`on_left_click`, `on_right_click`, `enchanted_when`).
+
+## Шаг 6. Откройте GUI игроку
 
 ```java
 guiManager.openGui(player, "main");
 ```
 
-Ожидаемый результат: у игрока открывается меню 27 слотов, клик по предмету запускает заданные действия.
+`"main"` — это id по имени файла `main.yml`.
 
-## 4. Первый CRUD
+## Шаг 7. Добавьте команду reload
 
 ```java
-players.create(new PlayerEntity(player.getUniqueId(), player.getName(), 100));
+public final class ReloadSubCommand implements SubCommand {
+    private final ReloadManager reloadManager;
 
-int updated = players.update()
-    .set("coins", 150)
-    .where("id", player.getUniqueId())
-    .execute();
+    public ReloadSubCommand(ReloadManager reloadManager) {
+        this.reloadManager = reloadManager;
+    }
+
+    @Override
+    public void onExecute(CommandSender sender, String[] args) {
+        ReloadReport report = reloadManager.reloadAll();
+        sender.sendMessage("Reload: ok=" + report.successful() + ", fail=" + report.failed());
+    }
+
+    @Override
+    public List<String> onTabComplete(CommandSender sender, String[] args) {
+        return List.of();
+    }
+}
 ```
 
-Что здесь происходит:
+Практика: выводите отчёт reload пользователю, чтобы быстро понять, что реально перезагрузилось.
 
-- `create(...)` вставляет новую строку в таблицу `players`.
-- `update().set(...).where(...).execute()` обновляет только запись текущего игрока.
-- `updated` содержит число изменённых строк.
+## Шаг 8. Включите i18n для сообщений
 
-## Что читать дальше
+```java
+Locale locale = Locale.forLanguageTag("ru-RU");
+String msg = context.i18n().message(locale, "shop.purchase.success", Map.of("amount", 100));
+player.sendMessage(msg);
+```
 
-- [Dynamic Database](/ru/docs/modules/dynamic-database)
-- [GUI API](/ru/docs/modules/gui-api)
-- [Command API](/ru/docs/modules/command-api)
+Храните тексты в `plugins/MyPlugin/i18n/*.properties`.
+
+## Шаг 9. Добавьте базовую наблюдаемость
+
+```java
+context.metrics().increment("myplugin.command.reload");
+
+long nanos = context.metrics().time("myplugin.db.ensure_profile", () -> {
+    ensureProfile(player);
+});
+
+context.logger().info("profile_ensured", Map.of(
+    "player", player.getName(),
+    "durationNanos", nanos
+));
+```
+
+Так вы заранее получаете диагностику и не ловите «слепые» баги в проде.
+
+## Шаг 10. Минимальный поток запуска
+
+Проверка после старта:
+
+1. Плагин включился без исключений.
+2. БД файл/подключение создались.
+3. Таблица `players` появилась.
+4. Меню `main.yml` открылось.
+5. Reload команда работает.
+
+Если любой шаг не работает, переходите в [Troubleshooting](/ru/docs/troubleshooting).
+
+## Ошибки, которые встречаются чаще всего
+
+- Нет JDBC драйвера в runtime.
+- Неверное имя GUI id.
+- Неправильные YAML-ключи actions.
+- Отсутствует закрытие `DatabaseManager` на disable.
+- Конфликт инициализации (GUI/БД вызываются до bootstrap context).
+
+## Что делать после quick-start
+
+Рекомендуемый порядок углубления:
+
+1. [Dynamic Database](/ru/docs/modules/dynamic-database) — relations, include graphs, миграции.
+2. [GUI API](/ru/docs/modules/gui-api) — кастомные actions/conditions, каталогизация меню.
+3. [Validation API](/ru/docs/modules/validation-api) — стабильная валидация входных данных.
+4. [Reload API](/ru/docs/modules/reload-api) — безопасный hot-reload.
+5. [Observability API](/ru/docs/modules/observability-api) — операционная зрелость.
+6. [Quests API](/ru/docs/modules/quests-api) — контентная механика прогресса.
+
+Если пройти этот порядок, вы получите не просто «работающий код», а поддерживаемую архитектуру плагина.

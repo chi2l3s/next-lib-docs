@@ -1,0 +1,184 @@
+---
+title: I18n API
+description: "Полное руководство по I18n API: TranslationStore, fallback, шаблоны, локализация ошибок, reload и стратегия мультиязычного контента."
+order: 19
+---
+
+# I18n API
+
+I18n API решает задачу локализации интерфейса плагина: тексты живут в словарях, а не захардкожены в Java.
+
+## 1. Компоненты
+
+- `TranslationStore` — абстракция хранилища переводов.
+- `FileTranslationStore` — `.properties` файлы.
+- `I18nService` — выдача сообщений с fallback.
+- `MessageTemplate` — подстановка аргументов.
+
+## 2. Поведение `I18nService`
+
+Алгоритм `message(locale, key, args)`:
+
+1. ищет `key` в указанной локали;
+2. если нет — ищет в fallback локали;
+3. если нет и там — возвращает сам `key`;
+4. если есть шаблон, подставляет аргументы.
+
+Это защищает от NPE и делает ошибки видимыми (ключ в UI вместо тихого null).
+
+## 3. Инициализация
+
+```java
+Path i18nDir = plugin.getDataFolder().toPath().resolve("i18n");
+FileTranslationStore store = new FileTranslationStore(i18nDir);
+I18nService i18n = new I18nService(store, Locale.forLanguageTag("en-US"));
+```
+
+Если используется `NextLibContext`, это уже создано внутри bootstrap.
+
+## 4. Структура файлов
+
+```text
+plugins/MyPlugin/i18n/
+  en_US.properties
+  ru_RU.properties
+  de_DE.properties
+```
+
+Соответствие locale -> файл:
+
+- `en-US` -> `en_US.properties`
+- `ru-RU` -> `ru_RU.properties`
+
+## 5. Формат словаря
+
+```properties
+menu.main.title=Главное меню
+error.no_permission=У вас нет прав
+quest.progress=Прогресс: {current}/{target}
+```
+
+### Рекомендации
+
+- ключи нижним регистром, через точки;
+- одинаковый набор ключей для всех локалей;
+- не смешивать UI-тексты и технические логи.
+
+## 6. Получение сообщения
+
+```java
+String title = i18n.message(Locale.forLanguageTag("ru-RU"), "menu.main.title");
+```
+
+С аргументами:
+
+```java
+String progress = i18n.message(
+    Locale.forLanguageTag("ru-RU"),
+    "quest.progress",
+    Map.of("current", 3, "target", 10)
+);
+```
+
+## 7. Локаль игрока
+
+Источники locale:
+
+- `player.locale()` (если доступно);
+- профиль игрока в вашей БД;
+- настройка через команду `/lang`.
+
+Важно, чтобы единый источник locale использовался во всех UI/командах.
+
+## 8. Reload переводов
+
+`FileTranslationStore` кеширует файлы. После правок нужен reload:
+
+```java
+context.reload().register(new Reloadable() {
+    @Override
+    public String id() { return "i18n.translations"; }
+
+    @Override
+    public void reload() {
+        context.translations().reload();
+    }
+});
+```
+
+## 9. Связка с Validation API
+
+Лучший паттерн: `ValidationError.code` = i18n key suffix.
+
+```java
+String msg = i18n.message(locale, "validation." + error.code(), Map.of("field", error.field()));
+```
+
+Так вы избегаете дублей текста по проекту.
+
+## 10. Стратегия ключей
+
+Рекомендуемая иерархия:
+
+- `menu.main.title`
+- `menu.shop.buy_button`
+- `command.reload.success`
+- `error.permission.denied`
+- `quest.daily.completed`
+
+Плюсы:
+
+- проще поддержка переводчиками;
+- легче поиск в коде;
+- меньше конфликтов.
+
+## 11. Типичные проблемы
+
+### Виден ключ вместо текста
+
+Причины:
+
+- ключ отсутствует в locale;
+- fallback файл неполный;
+- reload не выполнен после редактирования.
+
+### Локаль не подхватывается
+
+Причины:
+
+- неверное имя файла;
+- неправильный locale tag;
+- stale cache.
+
+### Аргументы не подставились
+
+Причина: mismatch имён в шаблоне и в `args` map.
+
+## 12. Антипаттерны
+
+- Хардкод сообщений в бизнес-логике.
+- Переводы с разной структурой ключей по языкам.
+- Использование i18n для технических SQL/debug логов.
+
+## 13. Паттерн мультиязычного проекта
+
+1. Все user-facing строки только через i18n.
+2. Все коды ошибок маппятся на i18n.
+3. Есть fallback-локаль с полным покрытием.
+4. Есть командный reload переводов.
+
+## 14. FAQ
+
+### Можно ли делать namespace по фичам?
+
+Да, это лучший путь (`quest.*`, `shop.*`, `admin.*`).
+
+### Можно ли хранить rich text/mini-message?
+
+Можно, если ваша formatter-цепочка поддерживает это. Главное — единая договорённость по формату.
+
+### Как масштабировать перевод на 5+ языков?
+
+Поддерживать ключи стабильными, автоматизировать проверку «missing keys» в CI, вести change log для translators.
+
+I18n API превращает локализацию из хаоса в управляемый слой проекта.

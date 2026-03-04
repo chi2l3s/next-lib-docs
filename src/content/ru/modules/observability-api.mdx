@@ -1,0 +1,220 @@
+---
+title: Observability API
+description: "Очень подробное руководство по Observability API: метрики, health-check, структурированные логи, эксплуатационные дашборды и диагностика прод-инцидентов."
+order: 18
+---
+
+# Observability API
+
+Observability API помогает видеть, что происходит внутри плагина во время реальной нагрузки.
+
+## 1. Что входит в модуль
+
+- `MetricsRegistry`: counters, timers, gauges.
+- `HealthRegistry`: проверки состояния (up/down).
+- `StructuredLogger`: форматированные ключ-значение логи.
+
+## 2. Зачем это критично
+
+Без наблюдаемости вы не отвечаете на базовые вопросы:
+
+- где появилась задержка;
+- что стало источником ошибок;
+- какая подсистема деградирует первой.
+
+С Observability API вы измеряете это явно.
+
+## 3. Метрики: Counters
+
+### Когда использовать
+
+- количество команд;
+- количество ошибок БД;
+- количество завершённых квестов.
+
+### Пример
+
+```java
+MetricsRegistry metrics = context.metrics();
+
+metrics.increment("myplugin.command.reload");
+metrics.add("myplugin.db.errors", 1);
+```
+
+Рекомендации по неймингу:
+
+- `module.submodule.metric`;
+- только стабильные ключи;
+- без user-specific high cardinality значений.
+
+## 4. Метрики: Timers
+
+### Зачем
+
+Показывают latency горячих операций.
+
+### Пример
+
+```java
+long nanos = metrics.time("myplugin.db.load_profile", () -> {
+    profileService.load(playerId);
+});
+```
+
+Потом можно читать агрегаты:
+
+```java
+TimerMetric t = metrics.timer("myplugin.db.load_profile");
+logger.info("count=" + t.count() + ", avg=" + t.averageNanos() + ", max=" + t.maxNanos());
+```
+
+Что обычно измерять:
+
+- DB запросы профиля;
+- обработка команд;
+- reload длительность;
+- построение сложных GUI.
+
+## 5. Метрики: Gauges
+
+Gauge = текущее значение «прямо сейчас».
+
+```java
+metrics.registerGauge("server.online_players", () -> (double) Bukkit.getOnlinePlayers().size());
+metrics.registerGauge("jvm.heap.used_mb", () -> {
+    Runtime r = Runtime.getRuntime();
+    long used = r.totalMemory() - r.freeMemory();
+    return used / 1024.0 / 1024.0;
+});
+```
+
+Gauge полезны для мониторинга давления ресурсов.
+
+## 6. HealthRegistry
+
+Health-check отвечает на вопрос: «подсистема жива?»
+
+```java
+HealthRegistry health = context.health();
+
+health.register("database.main", () -> {
+    try {
+        databaseClient.withConnection(connection -> null);
+        return HealthStatus.up("database reachable");
+    } catch (Exception ex) {
+        return HealthStatus.down(ex.getMessage());
+    }
+});
+
+health.register("i18n.bundle", () ->
+    Files.exists(context.i18nDirectory().resolve("en_US.properties"))
+        ? HealthStatus.up("bundle exists")
+        : HealthStatus.down("bundle missing")
+);
+```
+
+Проверки должны быть:
+
+- быстрыми;
+- безопасными;
+- без тяжёлой нагрузки.
+
+## 7. StructuredLogger
+
+Структурированные логи упрощают поиск инцидентов.
+
+```java
+context.logger().info("quest_completed", Map.of(
+    "player", player.getName(),
+    "questId", questId,
+    "durationMs", durationMs
+));
+```
+
+Плюсы:
+
+- легко фильтровать по полям;
+- единый стиль логирования;
+- лучше подходит для внешних log-систем.
+
+## 8. Recommended baseline observability
+
+Минимум для любого плагина:
+
+1. counter `command.executed`;
+2. counter `db.errors`;
+3. timer `db.query`;
+4. timer `reload.total`;
+5. gauge `online_players`;
+6. health `database.main`;
+7. health `i18n.bundle`.
+
+## 9. Типовая админ-команда `/health`
+
+Псевдопоток:
+
+1. вызвать `health.checkAll()`;
+2. посчитать up/down;
+3. вывести проблемные проверки и message;
+4. при down логировать warning.
+
+Это мгновенно сокращает время диагностики у админов.
+
+## 10. Типовая админ-команда `/metrics`
+
+Выводите:
+
+- counters по ключевым действиям;
+- top timers по avg/max;
+- gauges ресурсов.
+
+Даже простой текстовый отчёт сильно помогает.
+
+## 11. Диагностика по симптомам
+
+### Симптом: "сервер лагает периодами"
+
+Смотреть:
+
+- timer DB запросов;
+- timer reload;
+- gauge heap;
+- количество ошибок БД.
+
+### Симптом: "после релиза всё нестабильно"
+
+Смотреть:
+
+- health checks критичных модулей;
+- structured events around startup/reload;
+- разницу timer metrics до/после релиза.
+
+## 12. Антипаттерны
+
+- Сотни метрик без структуры.
+- Метрики с динамическими ключами (`user.<uuid>.x`).
+- Heavy health checks, которые сами создают лаги.
+- Логи без контекста (`error happened`).
+
+## 13. Практики зрелой эксплуатации
+
+- Определить SLO для критичных операций (например профиль < 50ms).
+- Пороговые алерты на db errors и down checks.
+- Версионировать metric keys.
+- Добавлять observability в каждую новую фичу сразу.
+
+## 14. FAQ
+
+### Нужно ли подключать внешние системы мониторинга?
+
+Для старта нет, встроенного слоя часто достаточно. Для больших серверов да, стоит экспортировать данные наружу.
+
+### Как часто опрашивать health?
+
+Обычно раз в несколько секунд/десятков секунд достаточно.
+
+### Что логировать в structured logs обязательно?
+
+Ключевые этапы: startup, reload, critical failures, completion важных операций.
+
+Observability API позволяет перевести поддержку плагина из режима «угадываем» в режим «измеряем и исправляем». 

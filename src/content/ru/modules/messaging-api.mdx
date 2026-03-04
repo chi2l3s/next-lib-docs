@@ -1,0 +1,163 @@
+---
+title: Messaging API
+description: "Полное руководство по Messaging API: in-memory pub/sub, типизация payload, паттерны событий, безопасный lifecycle и ограничения."
+order: 20
+---
+
+# Messaging API
+
+Messaging API в NextLib реализует локальную in-memory шину событий (`MessageBus`). Это способ связать модули без жёстких прямых зависимостей.
+
+## 1. Что такое локальный pub/sub
+
+Producer публикует событие в topic.
+
+Consumer подписывается на topic и получает payload.
+
+Producer не знает, кто подписан.
+
+Это уменьшает связанность и ускоряет развитие модулей.
+
+## 2. Контракты API
+
+- `MessageBus.subscribe(topic, payloadType, handler)`
+- `MessageBus.publish(topic, payload)`
+- `Subscription.unsubscribe()`
+- `MessageHandler<T>.onMessage(payload)`
+
+## 3. Базовый пример
+
+```java
+MessageBus bus = context.bus();
+
+Subscription sub = bus.subscribe("quest.completed", QuestCompletedEvent.class, event -> {
+    rewardService.grantReward(event.playerId(), event.questId());
+});
+
+bus.publish("quest.completed", new QuestCompletedEvent(playerId, "daily_hunt"));
+```
+
+## 4. Типобезопасность payload
+
+Подписка хранит `payloadType`. Обработчик вызывается только если payload совместим с этим типом.
+
+Плюс: меньше runtime ошибок вида «ожидали событие одного типа, пришёл другой объект».
+
+## 5. Нейминг topic
+
+Рекомендуемый стиль:
+
+- `domain.event`
+- `quest.completed`
+- `profile.updated`
+- `economy.balance.changed`
+
+Избегайте слишком общих названий (`event`, `update`).
+
+## 6. Lifecycle подписок
+
+Подписка возвращает `Subscription`. Если обработчик временный, его нужно снять:
+
+```java
+private Subscription sub;
+
+void enable() {
+    sub = bus.subscribe("profile.updated", ProfileUpdatedEvent.class, this::onProfileUpdated);
+}
+
+void disable() {
+    if (sub != null) sub.unsubscribe();
+}
+```
+
+## 7. Паттерны архитектуры
+
+### Fan-out
+
+Одно событие обрабатывается несколькими модулями:
+
+- rewards
+- metrics
+- notifications
+
+### Anti-corruption layer
+
+Listener Bukkit публикует доменное событие, а внутренние сервисы реагируют на него. Bukkit API не протекает в домен.
+
+### Audit trail
+
+Отдельный consumer пишет structured logs на все важные события.
+
+## 8. Ограничения модуля
+
+Messaging API это **in-process** и **in-memory**:
+
+- нет persistence очереди;
+- нет доставки после рестарта;
+- нет межсерверной репликации;
+- нет retries/acks/dead-letter.
+
+Если нужна durable или distributed шина — подключайте внешний брокер.
+
+## 9. Производительность
+
+`publish(...)` выполняет обработчики в рамках текущего потока. Значит медленный handler тормозит публикацию.
+
+Рекомендации:
+
+1. handler должен быть коротким;
+2. тяжелую работу делайте async;
+3. ошибки внутри handler логируйте структурированно.
+
+## 10. Типовые ошибки
+
+- payload не соответствует типу подписки;
+- забыли `unsubscribe` на unload;
+- тема названа неединообразно;
+- слишком много бизнес-логики в одном handler.
+
+## 11. Антипаттерны
+
+- Использовать bus как «глобальное хранилище состояния».
+- Публиковать сырой `Map<String,Object>` вместо typed event.
+- Подписываться на один topic для всего (`system.event`).
+
+## 12. Рекомендуемая модель event class
+
+```java
+public record QuestCompletedEvent(UUID playerId, String questId, long completedAtMillis) {}
+```
+
+Почему `record` удобен:
+
+- immutable;
+- компактный код;
+- понятный контракт payload.
+
+## 13. Integrations
+
+### С Observability
+
+- increment metric на publish;
+- increment metric на handler failure;
+- логировать ключевые события.
+
+### С Reload
+
+При reload feature-модуля временные подписки можно пересоздавать.
+
+## 14. FAQ
+
+### Можно ли подписаться wildcard на все топики?
+
+В текущем API нет wildcard-концепции. Лучше явно перечислять topics.
+
+### Можно ли использовать для кластера серверов?
+
+Нет, только внутри одного JVM процесса.
+
+### Что делать, если handler бросил исключение?
+
+Ловить и логировать внутри handler или оборачивающего adapter-слоя.
+
+Messaging API лучше всего работает как lightweight event backbone внутри одного плагина.

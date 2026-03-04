@@ -1,24 +1,22 @@
 ---
 title: Command API
-description: Человеко-читаемое руководство по SubCommand, LongCommandExecutor и CommandRegistry.
+description: "Полное руководство по Command API: архитектура сабкоманд, аргументы, права, tab-complete, интеграция с сервисами и production-паттерны."
 order: 12
 ---
 
 # Command API
 
-Command API решает три задачи:
+Command API в NextLib помогает построить команды как модульную систему, а не монолитный `if-else` в одном классе.
 
-1. Разбивает одну команду на сабкоманды.
-2. Централизует проверку прав.
-3. Даёт единый tab-complete по всем сабкомандам.
+## 1. Модель модуля
 
-## Архитектура
+Три ключевых элемента:
 
-- `SubCommand`: бизнес-логика одной ветки (`reload`, `give`, `stats`).
-- `LongCommandExecutor`: маршрутизатор, выбирающий сабкоманду по alias.
-- `CommandRegistry`: безопасная регистрация в Bukkit.
+- `SubCommand` — отдельная команда с собственной логикой.
+- `LongCommandExecutor` — роутинг по алиасам + проверка permission + tab-complete.
+- `CommandRegistry` — регистрация в Bukkit-команду из `plugin.yml`.
 
-## `SubCommand`
+## 2. `SubCommand`: контракт
 
 ```java
 public interface SubCommand {
@@ -27,72 +25,199 @@ public interface SubCommand {
 }
 ```
 
-Параметры `onExecute`:
+### Что значит `args`
 
-| Аргумент | Тип | Что означает |
-| --- | --- | --- |
-| `sender` | `CommandSender` | Источник команды: игрок, консоль, командный блок |
-| `args` | `String[]` | Полный набор аргументов после корневой команды |
+Для `/nextlib reload fast`:
 
-Практика:
+- `args[0] = reload`
+- `args[1] = fast`
 
-- `args[0]` обычно содержит имя сабкоманды.
-- Перед чтением `args[1]` и дальше всегда проверяйте `args.length`.
+Следствие: в `onExecute` всегда проверяйте длину массива до чтения аргументов.
 
-## `LongCommandExecutor`
+## 3. `LongCommandExecutor`: как работает роутинг
 
-Ключевой метод регистрации сабкоманд:
+### Регистрация сабкоманды
 
 ```java
-addSubCommand(command, aliases, permission)
+addSubCommand(subCommand, new String[]{"reload", "rl"}, new Permission("myplugin.reload"));
 ```
 
 Параметры:
 
-| Аргумент | Тип | Что делает |
-| --- | --- | --- |
-| `command` | `SubCommand` | Обработчик выполнения и tab-complete |
-| `aliases` | `String[]` | Список псевдонимов, первый alias используется как основной |
-| `permission` | `Permission` | Проверяется перед вызовом `onExecute` |
+- `subCommand`: объект бизнес-логики.
+- `aliases`: список имён, по которым команда найдётся.
+- `permission`: право для запуска.
 
-Алгоритм выполнения:
+### Алгоритм `onCommand`
 
-1. Берётся `args[0]`.
-2. Ищется зарегистрированный alias.
-3. Проверяется permission.
-4. Вызывается `onExecute` найденной сабкоманды.
+1. Нет `args[0]` -> `false`.
+2. Поиск wrapper по алиасу.
+3. Нет wrapper -> `false`.
+4. Нет permission -> отправка permission message.
+5. Делегирование в `onExecute`.
 
-Алгоритм tab-complete:
+### Алгоритм `onTabComplete`
 
-- при `args.length == 1` возвращает список главных alias;
-- при `args.length > 1` вызывает `SubCommand.onTabComplete`.
+- при `args.length == 1` возвращаются первые алиасы всех сабкоманд;
+- дальше делегирование конкретной сабкоманде.
 
-## `CommandRegistry`
+## 4. `CommandRegistry`
 
 ```java
 CommandRegistry registry = new CommandRegistry(plugin);
 registry.registerCommand("nextlib", new MainCommandExecutor());
 ```
 
-Что делает `registerCommand`:
+`registerCommand` безопасно:
 
-- ищет команду в `plugin.yml` по имени;
-- ставит `setExecutor` и `setTabCompleter`;
-- если команды нет, пишет warning и не падает с исключением.
+- проверяет наличие команды в `plugin.yml`,
+- если команды нет, пишет warning вместо падения плагина,
+- выставляет executor/tabCompleter.
 
-## Рабочий пример
+## 5. Полный каркас production-команды
 
 ```java
-public class MainCommand extends LongCommandExecutor {
-    public MainCommand() {
-        addSubCommand(new ReloadSubCommand(), new String[]{"reload", "rl"}, new Permission("my.reload"));
+public final class MainCommand extends LongCommandExecutor {
+    public MainCommand(MyServices services) {
+        addSubCommand(new ReloadSubCommand(services.reloadService()), new String[]{"reload", "rl"}, new Permission("myplugin.command.reload"));
+        addSubCommand(new StatsSubCommand(services.statsService()), new String[]{"stats"}, new Permission("myplugin.command.stats"));
+        addSubCommand(new HelpSubCommand(), new String[]{"help", "?"}, new Permission("myplugin.command.help"));
     }
 }
 ```
 
-## Что обычно ломается
+## 6. Разбор аргументов: правильная стратегия
 
-1. Команда не объявлена в `plugin.yml`.
-2. Alias в чате не совпадает с alias при регистрации.
-3. Нет проверки `args.length`, из-за чего падает `IndexOutOfBoundsException`.
-4. Код рассчитан только на `Player`, но команду вызывает консоль.
+### Плохой стиль
+
+- читать `args[2]` без проверки длины,
+- кидать stacktrace игроку,
+- usage писать в каждом месте разными строками.
+
+### Хороший стиль
+
+1. Явная проверка аргументов.
+2. Центральный usage.
+3. Валидация через Validation API.
+
+```java
+if (args.length < 2) {
+    sender.sendMessage("Usage: /nextlib reload <soft|hard>");
+    return;
+}
+```
+
+## 7. Права и безопасность
+
+Рекомендуемая схема permission-нейминга:
+
+- `plugin.command.help`
+- `plugin.command.reload`
+- `plugin.command.admin.*`
+
+Для `CommandSender`:
+
+```java
+if (!(sender instanceof Player player)) {
+    sender.sendMessage("Only players can run this command");
+    return;
+}
+```
+
+Не assume, что отправитель всегда игрок.
+
+## 8. Tab-complete как часть UX
+
+### Базовый фильтр по префиксу
+
+```java
+String prefix = args[1].toLowerCase(Locale.ROOT);
+return List.of("soft", "hard").stream()
+    .filter(v -> v.startsWith(prefix))
+    .toList();
+```
+
+### Что учитывать в реальных проектах
+
+- permission пользователя,
+- контекст (онлайн игроки, доступные миры, id квестов),
+- производительность (не делать тяжёлых запросов).
+
+## 9. Интеграция с Reload/Observability
+
+```java
+ReloadReport report = reloadManager.reloadAll();
+metrics.increment("command.reload.executed");
+logger.info("reload_command", Map.of("ok", report.successful(), "fail", report.failed()));
+```
+
+Команда становится операционным инструментом, а не «чёрным ящиком».
+
+## 10. Ошибки и обработка
+
+### Распространённые сбои
+
+- команда не зарегистрирована в `plugin.yml`;
+- опечатка в имени команды при `registerCommand`;
+- сабкоманда не добавлена в executor;
+- неверный permission.
+
+### Диагностика
+
+1. Проверить startup-логи.
+2. Проверить вывод `/help` и права.
+3. Проверить tab-complete видимость.
+
+## 11. Дизайн больших наборов команд
+
+### Паттерн A: Package-by-domain
+
+- `command/admin/*`
+- `command/player/*`
+- `command/economy/*`
+
+### Паттерн B: Thin command layer
+
+Командный слой только валидирует и оркестрирует.
+
+Бизнес-логика в сервисах:
+
+- `EconomyService`
+- `QuestService`
+- `ProfileService`
+
+### Паттерн C: I18n-first
+
+Все сообщения через i18n-ключи.
+
+## 12. Антипаттерны
+
+- Огромный switch в одном классе на 500 строк.
+- Бизнес-логика и SQL прямо в `onExecute`.
+- Таб-комплит без фильтрации и прав.
+- Отсутствие usage/help для пользователя.
+
+## 13. Большой FAQ
+
+### Что возвращать из `onCommand`: true или false?
+
+`false` обычно означает «неверное использование», чтобы Bukkit мог показать usage. `true` означает, что команда обработана.
+
+### Можно ли делать async внутри команды?
+
+Да, для тяжёлых задач (например БД/сеть), но UI/игровые действия возвращайте на main thread.
+
+### Как красиво сделать `/plugin help`?
+
+Соберите список доступных сабкоманд на основе permission и отдавайте только то, что игрок реально может использовать.
+
+## 14. Чеклист командного слоя
+
+- Все команды есть в `plugin.yml`.
+- Все сабкоманды имеют usage.
+- Все аргументы валидируются.
+- Все ошибки понятны пользователю.
+- Метрики команд собираются.
+- Критичные действия логируются.
+
+С такой дисциплиной Command API остаётся управляемым даже при десятках сабкоманд.

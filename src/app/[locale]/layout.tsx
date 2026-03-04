@@ -35,6 +35,12 @@ export default async function LocaleLayout({
     <NextIntlClientProvider messages={{}}>
       <ThemeProvider>
         <ThemePixelSnow />
+        <a
+          href="#content-start"
+          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[1500] focus:rounded-xl focus:border focus:bg-background focus:px-3 focus:py-2 focus:font-bold"
+        >
+          Skip to content
+        </a>
         <div className="docs-shell">
           <LayoutNav
             locale={typedLocale}
@@ -47,7 +53,9 @@ export default async function LocaleLayout({
           />
           <div className="mx-auto mt-6 flex max-w-[1400px] items-start">
             <Sidebar menu={menu} />
-            <main className="min-w-0 flex-1 p-4 lg:p-8">{children}</main>
+            <main id="content-start" className="min-w-0 flex-1 p-4 lg:p-8">
+              {children}
+            </main>
           </div>
         </div>
         <DocsAssistant locale={typedLocale} />

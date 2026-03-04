@@ -1,11 +1,479 @@
 ---
 title: API Reference
-description: Автогенерация API из Java-исходников.
+description: "Подробный справочник NextLib 1.0.8: модули, методы, параметры, контракты и практические сценарии."
 order: 19
 ---
 
 # API Reference
 
-Перейдите на интерактивную страницу API:
+Этот раздел не заменяет «гайды», а дополняет их: здесь собраны API-контракты, смысл аргументов, типичные комбинации вызовов, ограничения и ожидаемое поведение.
 
-[Открыть API Reference](/ru/docs/api-reference)
+## Как читать этот раздел
+
+- **Сигнатура**: ключевой метод или группа методов.
+- **Параметры**: что передавать и какие значения считаются валидными.
+- **Возврат**: что вы получите и когда.
+- **Ошибки/исключения**: на каких входных данных вызов падает.
+- **Практика**: когда метод использовать в плагине.
+
+## 1. NextLibContext (единый runtime-контейнер)
+
+### `NextLibContext.bootstrap(JavaPlugin plugin)`
+
+Назначение: поднимает «ядро» сервисов NextLib для вашего плагина.
+
+Что делает внутри:
+
+- создаёт `ReloadManager`, `MetricsRegistry`, `HealthRegistry`, `MessageBus`, `StructuredLogger`;
+- инициализирует i18n (`FileTranslationStore`, `I18nService`);
+- создаёт/проверяет папки данных (`<plugin>/i18n`);
+- регистрирует базовые health-check-и.
+
+Параметры:
+
+- `plugin`: экземпляр вашего `JavaPlugin`; не может быть `null`.
+
+Возврат:
+
+- инициализированный `NextLibContext`.
+
+Важные геттеры контекста:
+
+- `reload()` — доступ к Reload API;
+- `metrics()` — счётчики, таймеры, gauge;
+- `health()` — реестр health-check-ов;
+- `bus()` — in-memory message bus;
+- `translations()` — доступ к хранилищу переводов;
+- `i18n()` — получение локализованных сообщений;
+- `logger()` — структурированные JSON-like логи.
+
+Практика:
+
+- вызывайте `bootstrap(...)` **один раз** в `onEnable()`;
+- храните контекст в поле класса плагина;
+- не пересоздавайте контекст в командах/листенерах.
+
+## 2. Database Core (подключение и пул)
+
+### `DatabaseConfig.builder(DatabaseType type)`
+
+Типы:
+
+- `MYSQL`
+- `POSTGRESQL`
+- `SQLITE`
+
+Обязательные поля по типам:
+
+- для `MYSQL`/`POSTGRESQL`: `host`, `database`, `username`, `password`;
+- для `SQLITE`: `file`.
+
+Опциональные поля:
+
+- `port(int)` — если не задан, используется дефолт порта драйвера;
+- `property(String, String)` — свойства HikariCP (`maximumPoolSize`, `connectionTimeout` и т.д.);
+- `properties(Map<String, String>)` — пакетная установка свойств.
+
+### `DatabaseManager`
+
+Ключевые методы:
+
+- `register(String name, DatabaseConfig config)`
+- `get(String name): Optional<DatabaseClient>`
+- `getOrThrow(String name)`
+- `getDefault()`
+- `setDefaultClient(String name)`
+- `unregister(String name)`
+- `close()`
+
+Поведение:
+
+- первый зарегистрированный клиент автоматически становится default;
+- повторный `register` с тем же именем переоткрывает datasource;
+- `close()` закрывает все пулы и очищает реестр.
+
+Типичные ошибки:
+
+- `ConfigurationException` при отсутствии JDBC-драйвера или неверной конфигурации пула;
+- `DatabaseException`, если запрошен несуществующий клиент.
+
+Практика:
+
+- создавайте один `DatabaseManager` на плагин;
+- не создавайте datasource на каждый запрос;
+- всегда закрывайте manager в `onDisable()`.
+
+## 3. Dynamic Database API
+
+### Базовая инициализация
+
+```java
+DatabaseClient client = manager.register("main", config);
+DynamicDatabase db = new DynamicDatabase(client).withAutoMigrations(plugin);
+DynamicTable<PlayerEntity> players = db.register("players", PlayerEntity.class);
+```
+
+Смысл шагов:
+
+- `DynamicDatabase(client)` — ORM-слой над конкретным клиентом;
+- `withAutoMigrations(plugin)` — автогенерация SQL-миграций на основе metadata;
+- `register(table, entity)` — регистрация сущности и создание/сверка таблицы.
+
+### `DynamicTable<T>`: основные операции
+
+Создание:
+
+- `create(T entity)`
+- `createMany(Collection<T> entities)`
+
+Чтение:
+
+- `findById(Object id)`
+- `findUnique(String field, Object value)`
+- `findUnique(Map<String, Object> where)`
+- `findMany(Map<String, Object> where)`
+- `count()` / `count(Map<String, Object> where)`
+
+Обновление:
+
+- `update(Map<String, Object> where, Map<String, Object> data)`
+- `updateMany(Map<String, Object> where, Map<String, Object> data)`
+- `update().set(...).where(...).execute()`
+
+Удаление:
+
+- `delete(Map<String, Object> where)`
+- `deleteMany(Map<String, Object> where)`
+- `delete().where(...).execute()`
+
+Upsert:
+
+- `upsert(Map<String, Object> where, T createEntity, Map<String, Object> updateData)`
+
+### Entity annotations (актуально по исходникам)
+
+- `@PrimaryKey` — первичный ключ.
+- `@Column(name, unique, index)` — кастомизация колонки.
+- `@NotNull`, `@Size`, `@Min`, `@Max`, `@Pattern`, `@Email` — декларативная валидация.
+- `@Index/@Indexes`, `@Unique/@Uniques` — индексы и уникальные ограничения.
+- `@Convert(MyConverter.class)` + `ValueConverter<J, D>` — маппинг кастомного Java-типа в SQL-тип.
+
+Валидация применяется перед `create`, `createMany`, `update`, `upsert`, поэтому нарушения возвращаются как `ValidationException` с детальными ошибками полей.
+
+### Fluent query-операторы
+
+Базовые:
+
+- `where(field, value)`
+- `where(field, operator, value)`
+- `orWhere(...)`
+- `whereNot(...)`
+
+Строковые:
+
+- `whereLike(field, pattern)`
+- `whereStartsWith(field, value)`
+- `whereEndsWith(field, value)`
+- `whereContains(field, value)`
+
+Множественные/диапазоны:
+
+- `whereIn(field, Object... values)`
+- `whereBetween(field, min, max)`
+
+Проверки `NULL`:
+
+- `whereIsNull(field)`
+- `whereIsNotNull(field)`
+
+Пагинация и сортировка:
+
+- `orderBy(field)` / `orderBy(field, desc)`
+- `take(limit)`
+- `skip(offset)` — требует установленный `take(limit)`.
+
+### Include graphs (relations)
+
+`FindOneQuery` и `FindManyQuery` поддерживают:
+
+- `include("relationField")`
+- `executeGraph()` / `executeGraphs()`
+
+Возвращаемая обёртка `EntityGraph<T>`:
+
+- `root` — базовая сущность;
+- `relations` — карта загруженных связей.
+
+Практика:
+
+- include удобен для read-моделей и API-ответов;
+- для больших наборов данных контролируйте `take(limit)`;
+- не включайте все связи «на всякий случай».
+
+### Ограничения контракта
+
+- `update(...)` и `delete(...)` требуют непустой `where`, иначе бросают исключение;
+- `findUnique(where)` бросает ошибку, если найдено более 1 записи;
+- `IN` требует минимум 1 значение;
+- `BETWEEN` требует ровно 2 значения.
+
+## 4. GUI API
+
+### `GuiManager`
+
+Ключевые методы:
+
+- `loadFromFolder(File folder)` — загрузка меню из директории;
+- `reloadAll()` — перезагрузка всех GUI;
+- `registerGui(String id, Gui gui)` — ручная регистрация;
+- `createGui(String id, String title, int size)` — программное создание;
+- `openGui(Player player, String id)` — открыть меню игроку;
+- `refresh(Player player)` — обновить открытый инвентарь.
+
+### YAML contract (runtime)
+
+Поддерживаемые ключи для item:
+
+- `material`
+- `amount`
+- `name`
+- `lore`
+- `slot` или `slots`
+- `on_left_click`
+- `on_right_click`
+- `enchanted_when`
+
+Формат `slots`:
+
+- одиночные значения: `"13"`
+- диапазоны: `"0-8"`
+- комбинации: `["0-8", "18-26"]`
+
+### Built-in actions
+
+- `close`
+- `command <cmd>`
+- `console <cmd>`
+- `message <text>`
+- `opengui <id>`
+- `update`
+- `playsound <SOUND> [volume] [pitch]`
+
+Пример:
+
+```yaml
+on_left_click:
+  - "message &aОткрываю магазин"
+  - "opengui shop"
+```
+
+### Conditions
+
+Built-in:
+
+- `always`
+- `never`
+
+Расширение:
+
+- `Conditions.registerCondition("name", factory)`
+- `Actions.registerAction("name", factory)`
+
+Это даёт возможность строить доменную DSL-конфигурацию меню под ваш сервер.
+
+## 5. Command API
+
+### `CommandRegistry`
+
+- `new CommandRegistry(plugin)`
+- `registerCommand(commandName, executor)`
+
+### `LongCommandExecutor`
+
+Сценарий:
+
+- определяете подкоманды через `addSubCommand(SubCommand, aliases, permission)`;
+- роутинг по `args[0]`;
+- встроенная таб-комплитация через `onTabComplete`.
+
+Контракт:
+
+- если `args.length < 1`, `onCommand` возвращает `false`;
+- если alias не найден, возвращает `false`;
+- если нет прав, отправляется permission message команды.
+
+`SubCommand`:
+
+- `onExecute(CommandSender sender, String[] args)`
+- `onTabComplete(CommandSender sender, String[] args)`
+
+## 6. Item API
+
+### `ItemBuilder`
+
+Конструкторы:
+
+- `ItemBuilder(Material material)`
+- `ItemBuilder(Material material, int amount)`
+- `ItemBuilder(Material material, ColorUtil colorUtil)`
+- `ItemBuilder(Material material, int amount, ColorUtil colorUtil)`
+
+Ключевые методы:
+
+- `setName(String)`
+- `setLore(String...)` / `setLore(List<String>)`
+- `addEnchant(Enchantment, int level, boolean ignoreLevelRestriction)`
+- `addEnchants(Map<Enchantment, Integer>)`
+- `setUnbreakable(boolean)`
+- `addFlags(ItemFlag...)`
+- `setSkullOwner(String playerName)`
+- `setPersistentData(JavaPlugin plugin, String key, String/int value)`
+- `build()`
+
+Практика:
+
+- храните служебные теги через `PersistentDataContainer` для надёжной идентификации предметов;
+- используйте `setUnbreakable` и `ItemFlag` для «чистого» UI-предмета;
+- для меню храните id action в PDC, а не в lore.
+
+## 7. Validation API
+
+### Основные элементы
+
+- `Validator<T>` — функция валидации;
+- `ValidationResult` — результат (валидно/невалидно + ошибки);
+- `ValidationError` — конкретная ошибка поля;
+- `ValidationException` — исключение для fail-fast сценариев.
+
+### `Validators`
+
+Готовые фабрики:
+
+- `notBlank(fieldName)`
+- `maxLength(fieldName, maxLength)`
+- `pattern(fieldName, pattern, message)`
+- `range(fieldName, min, max)`
+- `notEmpty(fieldName)`
+- `requireNonNull(fieldName)`
+- `field(fieldName, extractor, validator)`
+- `compose(list)`
+- `validate(value, validators...)`
+
+Практика:
+
+- валидируйте вход команды до бизнес-логики;
+- валидируйте DTO перед записью в БД;
+- в админ-командах возвращайте игроку понятные ошибки по полям.
+
+## 8. Reload API
+
+### `ReloadManager`
+
+Методы:
+
+- `register(Reloadable reloadable)`
+- `unregister(String id)`
+- `reloadAll(): ReloadReport`
+- `reload(String id): ReloadEntry`
+
+Смысл:
+
+- единый pipeline перезагрузки всех подсистем;
+- отчёт по каждому блоку (успех/ошибка/время).
+
+Практика:
+
+- регистрируйте отдельный `Reloadable` на каждую подсистему: конфиги, GUI, i18n, кеш;
+- не делайте внутри reload долгие блокировки main-thread.
+
+## 9. Observability API
+
+### `MetricsRegistry`
+
+- `increment(name)` — +1 к счётчику;
+- `add(name, delta)` — произвольное изменение;
+- `counter(name)` — текущее значение;
+- `time(name, Runnable)` — замер длительности блока;
+- `timer(name)` — ручной таймер;
+- `registerGauge(name, Supplier<Double>)`;
+- `gauge(name)`.
+
+### Health
+
+`HealthRegistry` хранит проверки «живо/неживо». Это удобно для `/health` команды, алертов и диагностики в проде.
+
+Практика:
+
+- ставьте health-check на БД, i18n-файлы, загрузку меню;
+- пишите structured-логи на старте и в reload.
+
+## 10. i18n API
+
+### `I18nService`
+
+- `message(Locale locale, String key)`
+- `message(Locale locale, String key, Map<String, Object> args)`
+
+Контракт:
+
+- если ключ отсутствует в текущей локали, используется fallback locale;
+- `args` подставляются в шаблон через `MessageTemplate`.
+
+Практика:
+
+- храните пользовательские тексты в `i18n/*.properties`;
+- не жёстко кодируйте сообщения в командах.
+
+## 11. Messaging API
+
+### `MessageBus` / `InMemoryMessageBus`
+
+- `subscribe(topic, payloadType, handler): Subscription`
+- `publish(topic, payload)`
+
+Рекомендации:
+
+- topic именуйте стабильно (`plugin.feature.event`);
+- payload делайте простым immutable-объектом;
+- `Subscription` закрывайте при выключении подсистемы.
+
+## 12. Quests API
+
+### `QuestManager`
+
+Базовые операции:
+
+- `registerQuest(Quest quest)`
+- `getQuest(String questId)`
+- `activateQuest(UUID playerId, String questId)`
+- `getActiveProgress(UUID playerId, String questId)`
+- `deactivateQuest(UUID playerId, String questId)`
+- `restorePlayer(UUID playerId)`
+
+Событийные апдейты прогресса:
+
+- `recordKill`, `recordTravel`, `recordCraft`, `recordPlaytime`,
+- `recordBlockBreak`, `recordBlockPlace`, `recordSmelt`, `recordBreed`, `recordTame`, `recordFish`, `recordConsume`,
+- `recordCustom`.
+
+Практика:
+
+- в Bukkit listeners делегируйте события в `QuestManager`;
+- бизнес-правила наград держите отдельно от трекинга objective;
+- персист состояния квестов делайте через `QuestStore`/`DatabaseQuestStore`.
+
+## 13. Мини-чеклист по качеству интеграции
+
+- Контекст (`NextLibContext`) инициализируется один раз в `onEnable`.
+- Все datasource закрываются в `onDisable`.
+- Для `update/delete` в Dynamic DB всегда задаётся `where`.
+- GUI YAML использует runtime-ключи (`on_left_click`, `on_right_click`, `enchanted_when`).
+- Все пользовательские строки вынесены в i18n.
+- Reload pipeline регистрирует все «горячие» подсистемы.
+- Есть хотя бы минимальная метрика/health-проверка.
+
+## Куда дальше
+
+- [Dynamic Database](/ru/docs/modules/dynamic-database) — глубже про relation annotations, include graphs и миграции.
+- [GUI API](/ru/docs/modules/gui-api) — подробный YAML-синтаксис и паттерны интерфейсов.
+- [Troubleshooting](/ru/docs/troubleshooting) — разбор типичных падений с практическими решениями.

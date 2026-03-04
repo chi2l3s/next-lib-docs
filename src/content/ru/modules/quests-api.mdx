@@ -1,0 +1,288 @@
+---
+title: Quests API
+description: "Очень подробное руководство по Quests API: модель квестов, цели, прогресс, persistence, event-интеграция, баланс и эксплуатация в проде."
+order: 21
+---
+
+# Quests API
+
+Quests API в NextLib предоставляет полный каркас для системы заданий: определения квестов, прогресс игрока, сохранение состояния и обновление прогресса по игровым событиям.
+
+## 1. Архитектура модуля
+
+Ключевые сущности:
+
+- `Quest`: неизменяемое описание квеста.
+- `QuestObjective`: правило одной цели.
+- `QuestProgress`: состояние игрока по целям.
+- `QuestManager`: координатор регистрации/активации/обновления.
+- `QuestStore`: интерфейс хранилища прогресса.
+- `DatabaseQuestStore`: SQL-реализация.
+
+Разделение важно: домен квестов отделён от механики хранения.
+
+## 2. `Quest` и его контракт
+
+`Quest` обычно включает:
+
+- `id` — стабильный идентификатор;
+- `name` — отображаемое имя;
+- `description` — описание;
+- `objectives` — список целей;
+- `repeatable` — повторяемость.
+
+Пример:
+
+```java
+Quest starter = new Quest(
+    "starter_hunt",
+    "Охотник новичок",
+    "Убей 10 зомби",
+    List.of(new KillObjective("kill_zombie", "Убийства зомби", EntityType.ZOMBIE, 10)),
+    false
+);
+```
+
+Правило качества: `id` и `objectiveId` должны быть стабильными между релизами.
+
+## 3. Objective модель
+
+Поддерживаемые типы:
+
+- `KILL_ENTITY`
+- `TRAVEL_DISTANCE`
+- `CRAFT_ITEM`
+- `PLAY_TIME`
+- `BREAK_BLOCK`
+- `PLACE_BLOCK`
+- `SMELT_ITEM`
+- `BREED_ENTITY`
+- `TAME_ENTITY`
+- `FISH`
+- `CONSUME_ITEM`
+- `CUSTOM`
+
+Каждый objective проверяет событие через `matches...()` методы и возвращает, влияет ли это событие на прогресс.
+
+## 4. `QuestProgress` как состояние
+
+`QuestProgress` хранит:
+
+- player id,
+- quest id,
+- map progress per objective,
+- target значения.
+
+Механика обновления:
+
+1. матчинг objective с событием;
+2. инкремент прогресса на amount;
+3. ограничение сверху target (`min(target, current+amount)`).
+
+Так исключается «переполнение» цели.
+
+## 5. Инициализация `QuestManager`
+
+```java
+DatabaseQuestStore store = new DatabaseQuestStore(databaseClient);
+QuestManager questManager = new QuestManager(store);
+
+questManager.registerQuest(starter);
+```
+
+Рекомендованный порядок:
+
+1. создать manager;
+2. зарегистрировать все определения квестов;
+3. только потом активировать/восстанавливать прогресс игроков.
+
+## 6. Активация и восстановление
+
+### Активация квеста
+
+```java
+QuestProgress progress = questManager.activateQuest(playerId, "starter_hunt");
+```
+
+Если запись существует в store, она загружается; иначе создаётся новая.
+
+### Восстановление игрока
+
+```java
+Collection<QuestProgress> restored = questManager.restorePlayer(playerId);
+```
+
+Вызывайте при входе игрока или после рестарта сервера.
+
+## 7. Обновление прогресса из событий
+
+QuestManager даёт специализированные методы:
+
+- `recordKill`
+- `recordTravel`
+- `recordCraft`
+- `recordPlaytime`
+- `recordBlockBreak`
+- `recordBlockPlace`
+- `recordSmelt`
+- `recordBreed`
+- `recordTame`
+- `recordFish`
+- `recordConsume`
+- `recordCustom`
+
+### Пример listener bridge
+
+```java
+@EventHandler
+public void onEntityDeath(EntityDeathEvent event) {
+    if (!(event.getEntity().getKiller() instanceof Player killer)) return;
+
+    questManager.recordKill(
+        killer.getUniqueId(),
+        event.getEntityType(),
+        event.getEntity() instanceof Player
+    );
+}
+```
+
+### Пример кастомного события
+
+```java
+questManager.recordCustom(playerId, "crate_open", 1.0, Map.of("crate", "epic"));
+```
+
+## 8. Persistence: `DatabaseQuestStore`
+
+SQL хранилище обычно опирается на таблицу вида:
+
+- `player_uuid`
+- `quest_id`
+- `objective_id`
+- `progress`
+- `target`
+
+Primary key: `(player_uuid, quest_id, objective_id)`.
+
+Сохранение должно быть транзакционным, чтобы не получить «полусохранённый» прогресс.
+
+## 9. Отслеживание завершения
+
+Полезный паттерн:
+
+1. до обновления проверить `isComplete()`;
+2. после обновления проверить `isComplete()`;
+3. если был false и стал true — выдать награду и записать событие.
+
+Так награда выдаётся ровно один раз на completion transition.
+
+## 10. Интеграция с GUI
+
+GUI может показывать:
+
+- активные квесты;
+- процент выполнения;
+- кнопку «принять»/«сдать». 
+
+Рекомендация: квестовые данные рендерить из кэша/модели, а не выполнять тяжёлые SQL в каждом клике.
+
+## 11. Интеграция с i18n
+
+Все названия/описания и сообщения прогресса лучше хранить в i18n ключах:
+
+- `quest.starter_hunt.name`
+- `quest.starter_hunt.desc`
+- `quest.progress.updated`
+- `quest.completed`
+
+Это упрощает мультиязычность и поддержку контента.
+
+## 12. Балансировка progression
+
+Практические советы:
+
+- короткие onboarding квесты (1-5 минут);
+- mid-term цели (15-40 минут);
+- long-term сезонные цели.
+
+Избегайте «стенки» из слишком долгих целей в начале.
+
+## 13. Эволюция квестов без потери прогресса
+
+Если вы меняете квесты между релизами:
+
+1. не меняйте `questId/objectiveId` без миграционного плана;
+2. если нужна новая цель — добавляйте новым id;
+3. для радикальных изменений делайте явную миграцию данных.
+
+## 14. Типовые ошибки
+
+### `Unknown quest id`
+
+Причина: не зарегистрирован definition.
+
+### Прогресс не восстанавливается
+
+Причина: не вызывается `restorePlayer`.
+
+### Прогресс не меняется
+
+Причина: `matches...()` не совпал по входным параметрам.
+
+### Двойной инкремент
+
+Причина: один и тот же игровой ивент обрабатывается двумя listener.
+
+## 15. Антипаттерны
+
+- Квестовая логика разбросана по listeners без manager.
+- Сохранение прогресса только в памяти.
+- Нестабильные id квестов.
+- Награда выдаётся без проверки transition completion.
+
+## 16. Observability для Quests
+
+Минимум метрик:
+
+- `quest.activated`
+- `quest.progress.updated`
+- `quest.completed`
+- `quest.persistence.error`
+
+Минимум логов:
+
+- `quest_activated`
+- `quest_progress_updated`
+- `quest_completed`
+
+Это сильно ускоряет диагностику «почему игроку не засчиталось».
+
+## 17. Большой FAQ
+
+### Как сделать ежедневные квесты?
+
+Хранить отдельный daily pool и пересоздавать/переактивировать квесты по расписанию, сохраняя дату цикла.
+
+### Как сделать повторяемые квесты?
+
+Использовать `repeatable=true` и на completion сбрасывать/пересоздавать progress по правилам дизайна.
+
+### Можно ли хранить награды внутри Quest?
+
+Можно как метаданные, но обычно лучше держать reward logic в отдельном сервисе для гибкости.
+
+### Как масштабировать квесты до сотен?
+
+- разделить registry по категориям;
+- lazy-активировать только нужные квесты;
+- держать быстрый in-memory доступ к definitions.
+
+## 18. Чеклист стабильной квестовой системы
+
+- Все quest definitions регистрируются на старте.
+- На login вызывается restore.
+- Все event bridges централизованы.
+- Completion transition обрабатывается ровно один раз.
+- Persistence покрыт smoke-тестами.
+
+С этим подходом Quests API становится надёжной контентной основой, а не источником случайных рассинхронов.
